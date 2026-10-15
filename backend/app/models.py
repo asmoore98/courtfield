@@ -83,6 +83,13 @@ class CostCategory(str, enum.Enum):
     other = "other"                  # permits, freight, disposal
 
 
+class MoveKind(str, enum.Enum):
+    receive = "receive"    # new stock into the warehouse (from a supplier)
+    to_job = "to_job"      # sent out to a job
+    from_job = "from_job"  # leftovers brought back from a job
+    adjust = "adjust"      # count correction (+ or -)
+
+
 class Company(Base):
     __tablename__ = "companies"
 
@@ -189,6 +196,24 @@ class JobTask(Base):
     job: Mapped[Job] = relationship(back_populates="tasks")
 
 
+class StockItem(Base):
+    """A price-list item: what it's called, how it's counted, what it costs,
+    and whether the warehouse keeps it in stock."""
+
+    __tablename__ = "stock_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    category: Mapped[CostCategory] = mapped_column(Enum(CostCategory), default=CostCategory.material)
+    unit: Mapped[str] = mapped_column(String(20), default="")
+    unit_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    sku: Mapped[str] = mapped_column(String(60), default="")
+    track_stock: Mapped[bool] = mapped_column(default=True)
+    active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class CostLine(Base):
     """One estimated non-labor cost on a job: a material, a rental, a sub, or
     anything else. Quantity x unit cost; materials also carry sales tax."""
@@ -199,6 +224,7 @@ class CostLine(Base):
     company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
     job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
     task_id: Mapped[str | None] = mapped_column(ForeignKey("job_tasks.id", ondelete="SET NULL"), nullable=True)
+    item_id: Mapped[str | None] = mapped_column(ForeignKey("stock_items.id", ondelete="SET NULL"), nullable=True)
     category: Mapped[CostCategory] = mapped_column(Enum(CostCategory), default=CostCategory.material)
     description: Mapped[str] = mapped_column(String(200))
     quantity: Mapped[float] = mapped_column(Float, default=0.0)
@@ -207,6 +233,33 @@ class CostLine(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
     job: Mapped[Job] = relationship(back_populates="cost_lines")
+
+
+class StockMove(Base):
+    """One movement of material: received, sent to a job, brought back, or a
+    count correction. Never deleted; mistakes are voided with a reason."""
+
+    __tablename__ = "stock_moves"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    kind: Mapped[MoveKind] = mapped_column(Enum(MoveKind))
+    item_id: Mapped[str | None] = mapped_column(ForeignKey("stock_items.id"), nullable=True, index=True)
+    job_id: Mapped[str | None] = mapped_column(ForeignKey("jobs.id"), nullable=True, index=True)
+    cost_line_id: Mapped[str | None] = mapped_column(ForeignKey("cost_lines.id", ondelete="SET NULL"), nullable=True)
+    description: Mapped[str] = mapped_column(String(200))
+    unit: Mapped[str] = mapped_column(String(20), default="")
+    quantity: Mapped[float] = mapped_column(Float)  # positive, except adjust can be negative
+    unit_cost: Mapped[float] = mapped_column(Float, default=0.0)  # cost at the time of the move
+    lot_number: Mapped[str] = mapped_column(String(60), default="")
+    note: Mapped[str] = mapped_column(Text, default="")
+    recorded_by_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    voided_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    void_reason: Mapped[str] = mapped_column(Text, default="")
+
+    recorded_by: Mapped[User] = relationship(foreign_keys=[recorded_by_id])
 
 
 class TimeEntry(Base):

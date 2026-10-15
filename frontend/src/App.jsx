@@ -4,6 +4,7 @@ import FieldView from "./FieldView";
 import OfficeView from "./OfficeView";
 import TeamView from "./TeamView";
 import TimesheetView from "./TimesheetView";
+import MaterialsView from "./MaterialsView";
 
 const ME_KEY = "cf.me";
 // Sample sign-ins: shown in the preview and in local development only.
@@ -208,13 +209,15 @@ export default function App() {
   const canOffice = me.sees_dollars;
   const canTeam = me.role === "gm";
   const canPayroll = me.role === "gm" || me.role === "owner";
+  const canMaterials = !DEMO && ["gm", "estimator", "owner", "warehouse"].includes(me.role);
   const views = [
     canField && ["field", "Field"],
     canOffice && ["office", "Jobs"],
+    canMaterials && ["materials", "Materials"],
     canPayroll && ["timesheets", "Timesheets"],
     canTeam && ["team", "Team"],
   ].filter(Boolean);
-  const view = mode ?? (canOffice ? "office" : "field");
+  const view = mode ?? (canOffice ? "office" : canField ? "field" : "materials");
 
   return (
     <div className="app">
@@ -238,14 +241,16 @@ export default function App() {
         </span>
       </header>
       <main className="content">
-        {!canField && !canOffice ? (
-          <p className="empty">Your role doesn't have a screen yet. Materials and warehouse tools arrive in Phase 2.</p>
+        {!canField && !canOffice && !canMaterials ? (
+          <p className="empty">Your role doesn't have a screen yet.</p>
+        ) : view === "materials" && canMaterials ? (
+          <MaterialsView me={me} />
         ) : view === "timesheets" && canPayroll ? (
           <TimesheetView me={me} />
         ) : view === "team" && canTeam ? (
           <TeamView me={me} />
         ) : view === "field" && canField ? (
-          <FieldView />
+          <FieldView me={me} />
         ) : (
           <OfficeView me={me} />
         )}

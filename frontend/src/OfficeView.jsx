@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { api } from "./api";
+import { DEMO, api } from "./api";
 import JobEditor, { COST_CATEGORIES, EstimateTable } from "./JobEditor";
 import TimeLog from "./TimeLog";
+import JobMaterials from "./JobMaterials";
 import HoursBar, { HoursText, statusOf } from "./HoursBar";
 
 const money = (n) =>
@@ -200,6 +201,12 @@ function JobDetail({ me, jobId, onBack, onEdit }) {
             <span className="fig-label">of {money(c.estimated_labor_cost)} labor budget</span>
           </div>
         )}
+        {sees$ && c.materials_actual_cost != null && c.estimate && (
+          <div>
+            <span className={`fig ${c.materials_actual_cost > c.estimate.material ? "t-over" : ""}`}>{money(c.materials_actual_cost)}</span>
+            <span className="fig-label">of {money(c.estimate.material)} materials used</span>
+          </div>
+        )}
         <div>
           <span className="fig">{c.crew_on_site}</span>
           <span className="fig-label">on site now</span>
@@ -243,6 +250,13 @@ function JobDetail({ me, jobId, onBack, onEdit }) {
       </section>
 
       {sees$ && c.estimate && <EstimatePanel jobId={jobId} costing={c} version={version} />}
+
+      {!DEMO && (
+        <section className="panel">
+          <h3>Materials for this job</h3>
+          <JobMaterials jobId={jobId} me={me} />
+        </section>
+      )}
 
       <TimeLog me={me} jobId={jobId} tasks={c.tasks} onChanged={() => setVersion((v) => v + 1)} />
     </div>

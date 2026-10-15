@@ -31,6 +31,12 @@ SEES_DOLLARS = {Role.owner, Role.gm, Role.estimator}
 ENTERS_TIME = {Role.gm, Role.crew_lead}
 # Who can create and edit jobs and their estimated hours.
 EDITS_JOBS = {Role.gm, Role.estimator}
+# Who logs material in and out of the warehouse.
+MANAGES_STOCK = {Role.gm, Role.warehouse}
+# Who keeps the price list.
+EDITS_PRICES = {Role.gm, Role.estimator}
+# Who sees a job's material list (dollars only for SEES_DOLLARS).
+SEES_MATERIALS = {Role.owner, Role.gm, Role.estimator, Role.crew_lead, Role.warehouse}
 # Who manages people, rates and sign-ins.
 MANAGES_TEAM = {Role.gm}
 # Roles that sign in. Plain crew members are clocked in by their crew lead.

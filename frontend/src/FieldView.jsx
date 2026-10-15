@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, safeGet, safeSet } from "./api";
+import { DEMO, api, safeGet, safeSet } from "./api";
 import { useFieldTime } from "./fieldStore";
 import HoursBar, { HoursText } from "./HoursBar";
 import InstallHint from "./InstallHint";
+import JobMaterials from "./JobMaterials";
 
 const JOBS_KEY = "cf.jobs";
 const CREW_KEY = "cf.crew";
@@ -52,7 +53,8 @@ function SyncStatus({ online, pendingCount, lastSync, onSync }) {
   );
 }
 
-export default function FieldView() {
+export default function FieldView({ me }) {
+  const [showMats, setShowMats] = useState(false);
   const jobs = useCached(JOBS_KEY, "/api/jobs");
   const crew = useCached(CREW_KEY, "/api/crew");
   const [jobId, setJobId] = useState(() => safeGet(JOB_KEY));
@@ -206,6 +208,18 @@ export default function FieldView() {
           })}
         </ul>
       </section>
+
+      {me && jobId && !DEMO && (
+        <section className="panel">
+          <div className="panel-head">
+            <h2>Materials</h2>
+            <button className="link" onClick={() => setShowMats((v) => !v)} aria-expanded={showMats}>
+              {showMats ? "Hide" : "Show what's planned and sent"}
+            </button>
+          </div>
+          {showMats && <JobMaterials key={jobId} jobId={jobId} me={me} compact />}
+        </section>
+      )}
 
       <div className={`actionbar ${selectedOnClock.length ? "show" : ""}`} aria-hidden={!selectedOnClock.length}>
         <button className="btn-stop" disabled={working || !selectedOnClock.length} onClick={() => run(() => field.clockOut(selectedOnClock))}>

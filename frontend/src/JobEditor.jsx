@@ -142,7 +142,10 @@ export function EstimateTable({ est, taxPct }) {
           <td />
         </tr>
         <tr className={`est-profit ${tone}`}>
-          <th scope="row">Expected profit</th>
+          <th scope="row">
+            Expected profit
+            {est.margin_pct != null && <span className="sub-inline est-margin-m">{Math.round(est.margin_pct * 1000) / 10}% margin</span>}
+          </th>
           <td className="num">{est.contract ? money(est.profit) : ""}</td>
           <td className="num">{est.margin_pct != null ? `${Math.round(est.margin_pct * 1000) / 10}% margin` : ""}</td>
         </tr>
@@ -157,6 +160,11 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [locating, setLocating] = useState(false);
+  const [items, setItems] = useState([]);
+
+  useEffect(() => {
+    api("/api/items").then(setItems).catch(() => {}); // price list; optional
+  }, []);
 
   useEffect(() => {
     if (!jobId) return;
@@ -199,6 +207,20 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
   };
 
   const setLine = (i, k, v) => setJob((j) => ({ ...j, cost_lines: j.cost_lines.map((c, n) => (n === i ? { ...c, [k]: v } : c)) }));
+  // Typing or picking a price-list name fills in its type, unit and cost.
+  const setLineName = (i, v) =>
+    setJob((j) => ({
+      ...j,
+      cost_lines: j.cost_lines.map((c, n) => {
+        if (n !== i) return c;
+        const item = items.find((it) => it.name.toLowerCase() === v.trim().toLowerCase());
+        if (item && item.id !== c.item_id)
+          return { ...c, description: item.name, item_id: item.id, category: item.category, unit: item.unit, unit_cost: item.unit_cost ?? c.unit_cost };
+        if (!item && c.item_id) return { ...c, description: v, item_id: null };
+        return { ...c, description: v };
+      }),
+    }));
+  const itemById = Object.fromEntries(items.map((it) => [it.id, it]));
   const removeLine = (i) => setJob((j) => ({ ...j, cost_lines: j.cost_lines.filter((_, n) => n !== i) }));
   const addLine = (category) => setJob((j) => ({ ...j, cost_lines: [...j.cost_lines, blankLine(category)] }));
 
@@ -249,6 +271,7 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
           unit: (c.unit ?? "").trim(),
           unit_cost: num(c.unit_cost),
           task_index: ti >= 0 ? ti : null,
+          item_id: c.item_id || null,
         };
       }),
       tasks: job.tasks.map((t) => ({
@@ -434,7 +457,10 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
           </label>
         </div>
         {job.cost_lines.length === 0 ? (
-          <p className="help">No lines yet. Add the coatings, sand, line paint, nets and posts, rentals and subs this job needs.</p>
+          <p className="help">
+            No lines yet. Add the coatings, sand, line paint, nets and posts, rentals and subs this job needs.
+            {" "}Material quantities here become the job's material list for the warehouse and crew lead.
+          </p>
         ) : (
           <ol className="line-edit">
             <li className="line-head" aria-hidden="true">
@@ -444,7 +470,18 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
               <li key={c.key}>
                 <label className="le-desc">
                   <span className="sr-only">Line {i + 1} item</span>
-                  <input value={c.description} onChange={(e) => setLine(i, "description", e.target.value)} placeholder="e.g. Acrylic resurfacer" />
+                  <input list="cf-items" value={c.description} onChange={(e) => setLineName(i, e.target.value)} placeholder={items.length ? "Pick from the price list or type" : "e.g. Acrylic resurfacer"} />
+                  {c.item_id && itemById[c.item_id] && (
+                    <span className="le-from">
+                      Price list
+                      {itemById[c.item_id].unit_cost != null && Number(c.unit_cost) !== itemById[c.item_id].unit_cost && (
+                        <>
+                          {" "}is {money2(itemById[c.item_id].unit_cost)}.{" "}
+                          <button type="button" className="link" onClick={() => setLine(i, "unit_cost", itemById[c.item_id].unit_cost)}>Use it</button>
+                        </>
+                      )}
+                    </span>
+                  )}
                 </label>
                 <label className="le-cat">
                   <span className="sr-only">Line {i + 1} type</span>
@@ -486,6 +523,11 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
             ))}
           </ol>
         )}
+        <datalist id="cf-items">
+          {items.map((it) => (
+            <option key={it.id} value={it.name} />
+          ))}
+        </datalist>
         <datalist id="cf-units">
           {UNITS.map((u) => (
             <option key={u} value={u} />

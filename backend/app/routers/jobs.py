@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..auth import EDITS_JOBS, SEES_DOLLARS, current_user, require_roles
 from ..costing import job_costing
+from ..materials import material_actual_cost
 from ..db import get_db
 from ..models import CostLine, Job, JobStatus, JobTask, Role, TimeEntry, User
 from ..schemas import JobCosting, JobEditOut, JobIn, JobOut, JobStatusIn, JobUpdate, TaskOutWithTime
@@ -34,6 +35,15 @@ def _serialize(job: Job, user: User) -> JobOut:
     return out
 
 
+def _check_items(db: Session, lines, company_id: str) -> None:
+    from ..models import StockItem
+    ids = {ln.item_id for ln in lines if ln.item_id}
+    if ids:
+        found = set(db.scalars(select(StockItem.id).where(StockItem.id.in_(ids), StockItem.company_id == company_id)))
+        if ids - found:
+            raise HTTPException(422, "A cost line points at a price-list item that doesn't exist")
+
+
 def _apply_cost_lines(job: Job, lines, tasks_in_order: list[JobTask], company_id: str) -> None:
     """Replace the job's cost lines with `lines`, keeping ids for lines sent
     back with one. task_index points into this save's task list."""
@@ -48,7 +58,8 @@ def _apply_cost_lines(job: Job, lines, tasks_in_order: list[JobTask], company_id
             raise HTTPException(422, f"Cost line {order + 1} points at a task that isn't in the job")
         task = tasks_in_order[ln.task_index] if ln.task_index is not None else None
         fields = dict(category=ln.category, description=ln.description.strip(), quantity=ln.quantity,
-                      unit=ln.unit.strip(), unit_cost=ln.unit_cost, sort_order=order, task_id=task.id if task else None)
+                      unit=ln.unit.strip(), unit_cost=ln.unit_cost, sort_order=order, task_id=task.id if task else None,
+                      item_id=ln.item_id)
         if ln.id:
             for k, v in fields.items():
                 setattr(existing[ln.id], k, v)
@@ -71,7 +82,7 @@ def list_jobs(status: JobStatus | None = None, user: User = Depends(current_user
     q = select(Job).where(Job.company_id == user.company_id).options(selectinload(Job.tasks), selectinload(Job.cost_lines)).order_by(Job.created_at.desc())
     if status:
         q = q.where(Job.status == status)
-    elif user.role == Role.crew_lead:
+    elif user.role in (Role.crew_lead, Role.warehouse):
         q = q.where(Job.status != JobStatus.complete)  # crews only need open work
     return [_serialize(j, user) for j in db.scalars(q)]
 
@@ -86,6 +97,7 @@ def create_job(body: JobIn, user: User = Depends(require_roles(*EDITS_JOBS)), db
         job.tasks.append(JobTask(company_id=user.company_id, sort_order=i, **t.model_dump(exclude={"id", "sort_order"})))
     db.add(job)
     db.flush()  # task ids for cost lines
+    _check_items(db, body.cost_lines, user.company_id)
     _apply_cost_lines(job, body.cost_lines, list(job.tasks), user.company_id)
     db.commit()
     return JobOut.model_validate(load_job(db, user, job.id))
@@ -98,7 +110,7 @@ def jobs_summary(user: User = Depends(require_roles(*SEES_DOLLARS)), db: Session
         select(Job).where(Job.company_id == user.company_id)
         .options(selectinload(Job.tasks), selectinload(Job.cost_lines)).order_by(Job.created_at.desc())
     )
-    return [job_costing(j, _entries(db, j), with_dollars=True) for j in jobs]
+    return [job_costing(j, _entries(db, j), with_dollars=True) | {"materials_actual_cost": material_actual_cost(db, j)} for j in jobs]
 
 
 @router.get("/{job_id}", response_model=JobOut, response_model_exclude_none=True)
@@ -168,6 +180,7 @@ def update_job(job_id: str, body: JobUpdate, user: User = Depends(require_roles(
             in_order.append(nt)
     db.flush()  # ids for new tasks
     if body.cost_lines is not None:
+        _check_items(db, body.cost_lines, user.company_id)
         _apply_cost_lines(job, body.cost_lines, in_order, user.company_id)
     db.commit()
     db.expire(job)  # reload tasks in their new order
@@ -187,4 +200,7 @@ def get_costing(job_id: str, user: User = Depends(current_user), db: Session = D
     if user.role in (Role.crew, Role.warehouse):
         raise HTTPException(403, "Your role can't do that")
     job = load_job(db, user, job_id)
-    return job_costing(job, _entries(db, job), with_dollars=user.role in SEES_DOLLARS)
+    out = job_costing(job, _entries(db, job), with_dollars=user.role in SEES_DOLLARS)
+    if user.role in SEES_DOLLARS:
+        out["materials_actual_cost"] = material_actual_cost(db, job)
+    return out

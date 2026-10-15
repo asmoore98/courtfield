@@ -9,11 +9,13 @@ import random
 import uuid
 from datetime import datetime, timedelta, time
 
+from sqlalchemy import select
+
 from . import config
 from .auth import hash_password
 from .db import Base, SessionLocal, engine
 from .models import (
-    Company, CostCategory, CostLine, CourtType, Job, JobStatus, JobTask, Role, ScopeType, TaskType, TimeEntry, User, utcnow,
+    Company, CostCategory, CostLine, CourtType, Job, MoveKind, StockItem, StockMove, JobStatus, JobTask, Role, ScopeType, TaskType, TimeEntry, User, utcnow,
 )
 
 # Dev tokens. Sign in on the front end by pasting one of these.
@@ -25,6 +27,7 @@ ACCOUNTS = {
     "dev-estimator": ("Riley Shaw", Role.estimator, 0),
     "dev-lead-1": ("Marco Diaz", Role.crew_lead, 38),
     "dev-lead-2": ("Jordan Kemp", Role.crew_lead, 36),
+    "dev-warehouse": ("Dee Warren", Role.warehouse, 0),
 }
 CREW = [("Luis Vega", 27), ("Tyler Brooks", 25), ("Andre Wells", 26), ("Kenny Ruiz", 24)]
 
@@ -104,6 +107,18 @@ SAMPLE_LINES = {
 }
 
 
+# (name, category, unit, unit cost, warehouse stocks it, opening count). Made-up prices.
+PRICE_LIST = [
+    ("Acrylic resurfacer", CostCategory.material, "pail", 120.0, True, 80),
+    ("Color coat concentrate", CostCategory.material, "pail", 150.0, True, 60),
+    ("Line paint", CostCategory.material, "gal", 55.0, True, 24),
+    ("Silica sand", CostCategory.material, "bag", 9.0, True, 200),
+    ("Crack filler", CostCategory.material, "gal", 38.0, True, 30),
+    ("Tennis posts and nets", CostCategory.material, "set", 650.0, True, 4),
+    ("Pressure washer rental", CostCategory.equipment, "day", 110.0, False, 0),
+]
+
+
 def dev_email(key: str) -> str:
     """dev-lead-1 -> lead-1@sample.test"""
     return f"{key.removeprefix('dev-')}@sample.test"
@@ -136,6 +151,19 @@ def seed() -> None:
     db.add(User(company_id=other.id, name="Other GM", role=Role.gm, email=dev_email("dev-other-gm"), password_hash=pw))
     db.flush()
 
+    # Price list (made-up prices) and starting stock
+    gm = users["dev-gm"]
+    items = {}
+    for name, cat, unit, cost, track, start_qty in PRICE_LIST:
+        it = StockItem(company_id=co.id, name=name, category=cat, unit=unit, unit_cost=cost, track_stock=track)
+        db.add(it)
+        items[name] = it
+    db.flush()
+    for name, cat, unit, cost, track, start_qty in PRICE_LIST:
+        if track and start_qty:
+            db.add(StockMove(company_id=co.id, kind=MoveKind.receive, item_id=items[name].id, description=name, unit=unit,
+                             quantity=start_qty, unit_cost=cost, recorded_by_id=gm.id, note="Opening count (sample)"))
+
     today = utcnow().date()
     lead1, lead2 = users["dev-lead-1"], users["dev-lead-2"]
     team_a = [lead1, crew[0], crew[1]]
@@ -150,7 +178,8 @@ def seed() -> None:
         db.flush()
         for n, (cat, desc, qty, unit, cost, task_i) in enumerate(SAMPLE_LINES.get(i, [])):
             job.cost_lines.append(CostLine(company_id=co.id, category=cat, description=desc, quantity=qty, unit=unit,
-                                           unit_cost=cost, sort_order=n, task_id=job.tasks[task_i].id if task_i is not None else None))
+                                           unit_cost=cost, sort_order=n, task_id=job.tasks[task_i].id if task_i is not None else None,
+                                           item_id=items[desc].id if desc in items else None))
         job.sales_tax_pct = 7.0 if i in SAMPLE_LINES else 0.0
 
         team, lead = (team_a, lead1) if i % 2 == 0 else (team_b, lead2)
@@ -169,6 +198,19 @@ def seed() -> None:
                     worker_id=w.id, entered_by_id=lead.id, clock_in=now - timedelta(hours=2, minutes=15),
                     in_lat=lat, in_lng=lng, client_updated_at=now - timedelta(hours=2, minutes=15),
                 ))
+    # Coral Ridge (active): material already out to the job, some brought back
+    coral = db.scalar(select(Job).where(Job.company_id == co.id, Job.name.like("Coral Ridge%")))
+    db.flush()
+    wh = users["dev-warehouse"]
+    lines = {ln.description: ln for ln in coral.cost_lines}
+    for desc, qty, lot, kind in [("Acrylic resurfacer", 30, "AR-2291", MoveKind.to_job), ("Silica sand", 40, "", MoveKind.to_job),
+                                 ("Color coat concentrate", 12, "CC-1187", MoveKind.to_job), ("Acrylic resurfacer", 3, "", MoveKind.from_job)]:
+        ln = lines[desc]
+        db.add(StockMove(company_id=co.id, kind=kind, item_id=ln.item_id, job_id=coral.id, cost_line_id=ln.id, description=desc,
+                         unit=ln.unit, quantity=qty, unit_cost=ln.unit_cost, lot_number=lot, recorded_by_id=wh.id))
+    db.add(StockMove(company_id=co.id, kind=MoveKind.to_job, item_id=items["Crack filler"].id, job_id=coral.id, description="Crack filler",
+                     unit="gal", quantity=2, unit_cost=items["Crack filler"].unit_cost, recorded_by_id=wh.id,
+                     note="Found a few cracks at the north baseline"))
     db.commit()
     db.close()
     print(f"Seeded sample data. Sign in as any of {', '.join(dev_email(k) for k in ACCOUNTS)} with password {DEV_PASSWORD}")

@@ -31,6 +31,8 @@ class MeOut(UserOut):
     sees_dollars: bool
     enters_time: bool
     edits_jobs: bool
+    manages_stock: bool = False
+    edits_prices: bool = False
 
 
 # ---------- jobs ----------
@@ -60,6 +62,7 @@ class CostLineIn(BaseModel):
     unit_cost: float = Field(ge=0, le=10_000_000)
     # Position of the linked task in this save's task list (new tasks have no id yet).
     task_index: int | None = Field(default=None, ge=0)
+    item_id: str | None = None  # price-list item this line came from
 
 
 class CostLineOut(ORM):
@@ -70,6 +73,7 @@ class CostLineOut(ORM):
     unit: str
     unit_cost: float
     task_id: str | None
+    item_id: str | None = None
     sort_order: int
 
 
@@ -265,6 +269,7 @@ class JobCosting(BaseModel):
     labor_variance: float | None = None  # complete jobs only; positive = over budget
     # Estimate summary (dollars roles only)
     estimate: dict | None = None
+    materials_actual_cost: float | None = None  # sent minus returned, at cost
 
 
 # ---------- sign-in ----------
