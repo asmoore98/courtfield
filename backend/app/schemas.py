@@ -235,3 +235,67 @@ class JobCosting(BaseModel):
     actual_labor_cost: float | None = None
     labor_cost_used_pct: float | None = None
     labor_variance: float | None = None  # complete jobs only; positive = over budget
+
+
+# ---------- sign-in ----------
+
+class LoginIn(BaseModel):
+    email: str = Field(min_length=3, max_length=254)
+    password: str = Field(min_length=1, max_length=200)
+    device: str = Field(default="", max_length=200)
+
+
+class SessionOut(BaseModel):
+    token: str
+    me: MeOut
+
+
+class InviteInfo(BaseModel):
+    name: str
+    email: str | None
+    company_name: str
+    resetting: bool  # true when the person already had a password
+
+
+class SetPasswordIn(BaseModel):
+    password: str = Field(min_length=8, max_length=200)
+    device: str = Field(default="", max_length=200)
+
+
+# ---------- team ----------
+
+class PersonOut(BaseModel):
+    id: str
+    name: str
+    role: Role
+    email: str | None
+    hourly_cost: float
+    active: bool
+    signs_in: bool
+    has_password: bool
+    devices: int
+    last_seen: datetime | None
+
+    @field_serializer("last_seen")
+    def _as_utc(self, v: datetime | None):
+        return None if v is None else v.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+class PersonIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    role: Role
+    email: str | None = Field(default=None, max_length=254)
+    hourly_cost: float = Field(default=0, ge=0, le=1000)
+
+
+class PersonEdit(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    role: Role | None = None
+    email: str | None = Field(default=None, max_length=254)
+    hourly_cost: float | None = Field(default=None, ge=0, le=1000)
+    active: bool | None = None
+
+
+class PersonSaved(BaseModel):
+    person: PersonOut
+    invite_url: str | None = None

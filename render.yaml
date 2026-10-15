@@ -1,0 +1,31 @@
+# Render Blueprint: one web service (the app) and one Postgres database.
+# In Render: New > Blueprint, pick this repo, fill in the three INITIAL_* values.
+services:
+  - type: web
+    name: courtfield
+    runtime: docker
+    plan: starter          # always on; the free plan sleeps after 15 minutes idle
+    region: virginia       # closest Render region to Florida
+    healthCheckPath: /api/health
+    autoDeploy: true       # every push to main redeploys
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: courtfield-db
+          property: connectionString
+      - key: COURTFIELD_ENV
+        value: production
+      # First-start setup: your company and you as its general manager.
+      # Your one-time password link appears in the service's Logs tab.
+      - key: INITIAL_COMPANY
+        sync: false
+      - key: INITIAL_GM_NAME
+        sync: false
+      - key: INITIAL_GM_EMAIL
+        sync: false
+
+databases:
+  - name: courtfield-db
+    plan: basic-256mb      # smallest paid plan; free databases are deleted after 30 days
+    region: virginia
+    postgresMajorVersion: "16"

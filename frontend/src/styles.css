@@ -385,3 +385,44 @@ tbody th { font-weight: 600; }
 .install-text span { color: var(--muted); font-size: 0.95rem; }
 .install-actions { grid-column: 1 / -1; display: flex; gap: 16px; align-items: center; justify-content: flex-end; }
 .install-actions .btn { min-height: 44px; }
+
+/* ---------- sign-in form, team ---------- */
+
+.signin form { display: grid; gap: 6px; }
+.signin form label { margin-top: 8px; margin-bottom: 0; }
+.signin form input { width: 100%; }
+.btn.wide { width: 100%; margin-top: 16px; }
+.signin .help { margin-top: 16px; }
+
+.invite-box {
+  display: grid; gap: 8px; padding: 16px; margin: 12px 0; border: 2px solid var(--court); border-radius: 10px; background: var(--panel);
+}
+.invite-box .help { margin: 0; }
+.invite-box .link { justify-self: start; }
+.invite-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.invite-row input {
+  flex: 1 1 260px; min-width: 0; min-height: 48px; padding: 0 10px; font: 400 0.95rem/1 var(--font);
+  border: 1px solid var(--rule); border-radius: 8px; background: var(--page); color: var(--asphalt);
+}
+
+.people { list-style: none; margin: 0; padding: 0; }
+.people > li { padding: 12px 0; border-top: 1px solid var(--rule); display: grid; gap: 8px; }
+.people > li:first-child { border-top: 0; }
+.people > li.is-off .person-main, .people > li.is-off .person-cost { opacity: 0.55; }
+.person { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px 20px; align-items: baseline; }
+.person-main { display: grid; gap: 2px; min-width: 0; }
+.person-name { font-weight: 600; font-size: 1.1rem; }
+.you { color: var(--muted); font-weight: 400; }
+.person-meta { color: var(--muted); font-size: 0.95rem; overflow-wrap: anywhere; }
+.person-cost { font-family: var(--font-num); font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.signin-status { font-size: 0.9rem; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--rule); color: var(--muted); white-space: nowrap; }
+.s-ok { color: var(--under); border-color: var(--under); }
+.s-wait { color: var(--near); border-color: var(--near); }
+.s-off { color: var(--over); border-color: var(--over); }
+.person-actions { display: flex; flex-wrap: wrap; gap: 4px 18px; }
+.link.danger { color: var(--over); }
+
+@media (max-width: 640px) {
+  .person { grid-template-columns: minmax(0, 1fr) auto; }
+  .signin-status { grid-column: 1 / -1; justify-self: start; }
+}

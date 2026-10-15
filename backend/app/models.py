@@ -93,9 +93,46 @@ class User(Base):
     role: Mapped[Role] = mapped_column(Enum(Role))
     # Burdened labor cost per hour (wage + taxes + comp). Drives actual labor $.
     hourly_cost: Mapped[float] = mapped_column(Float, default=0.0)
-    # Development-only bearer token. Replace with real auth before any live use.
-    api_token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    # Sign-in. Crew members who never use the app have no email or password;
+    # crew leads clock them in. Emails are stored lowercased.
+    email: Mapped[str | None] = mapped_column(String(254), unique=True, index=True, nullable=True)
+    password_hash: Mapped[str | None] = mapped_column(String(200), nullable=True)
     active: Mapped[bool] = mapped_column(default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class DeviceSession(Base):
+    """One signed-in device. Only a hash of the token is stored, so a
+    database leak doesn't hand out working sign-ins."""
+
+    __tablename__ = "sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_used_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    device: Mapped[str] = mapped_column(String(200), default="")
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    user: Mapped[User] = relationship()
+
+
+class Invite(Base):
+    """A one-time link that lets a person set (or reset) their password."""
+
+    __tablename__ = "invites"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    created_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    user: Mapped[User] = relationship(foreign_keys=[user_id])
 
 
 class Job(Base):

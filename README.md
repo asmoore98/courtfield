@@ -16,6 +16,8 @@ This is **Phase 1: labor hours versus the estimate.** Materials (Phase 2), estim
 - **Installs like an app:** on Android, an Install button; on iPhone, Add to Home Screen. Once installed it opens full-screen and loads with no signal, using the jobs and crew saved from the last sync.
 - **Job status (GM):** start, complete or reopen a job. Crew leads only see jobs that aren't complete.
 - **Office view (GM, owner, estimator):** every job's hours against the estimate, labor dollars against the labor budget, and a per-task breakdown with the time log.
+- **Sign-in:** email and password, with passwords stored as salted scrypt hashes. Each phone or computer gets its own sign-in that lasts 90 days, and the GM can end it at any time. New people and password resets use one-time links that expire in 7 days. Repeated wrong passwords are slowed down.
+- **Team (GM):** add people with their role and labor cost per hour, send sign-in links, sign a lost phone out, or turn someone off. Plain crew members don't need an email; their crew lead clocks them in.
 - **Roles:** crew leads see hours only, never dollars. The owner is read-only. Only the GM and estimators create jobs.
 - **Multi-tenant from day one:** every row carries a company id, and every query is scoped to the signed-in user's company.
 
@@ -36,7 +38,11 @@ npm run dev                        # http://localhost:5173
 
 To serve everything from one port instead, run `npm run build` in `frontend/`. The backend serves `frontend/dist` automatically.
 
-Sign in with a sample account from the sign-in screen: crew lead, general manager, owner or estimator.
+Sign in with a sample account from the sign-in screen (crew lead, general manager, owner or estimator). Each is `<role>@sample.test` with password `courtfield-dev`. Sample accounts only exist in development; `python -m app.seed` refuses to run unless `COURTFIELD_ENV=dev`.
+
+## Put it online
+
+See [DEPLOY.md](DEPLOY.md). It covers a Render Blueprint (`render.yaml`) and a `Dockerfile` that builds the web app and runs the API, applying database migrations on startup.
 
 ### Clickable preview without a server
 
@@ -66,10 +72,18 @@ frontend/src/
   HoursBar.jsx    hours against the estimate, with the estimate drawn as a painted line
 ```
 
-## Before real use
+## Database changes
 
-- **Replace dev auth.** Sign-in currently uses static access codes. It needs real accounts with hashed passwords or an identity provider, plus short-lived sessions.
-- **Move to Postgres** by setting `DATABASE_URL`, and add migrations (Alembic). Until then, schema changes mean re-running `python -m app.seed` on a dev database.
-- **HTTPS hosting.** Installing to the home screen and the offline service worker only work over HTTPS (or on localhost).
+Production uses Postgres with Alembic migrations in `backend/migrations`. After changing `models.py`:
+
+```bash
+cd backend
+alembic revision --autogenerate -m "what changed"   # review the generated file
+alembic upgrade head
+```
+
+## Still to do
+
 - **Payroll export** and an accounting export (QuickBooks or whatever the pilot uses).
 - **Address lookup.** Job location is entered as coordinates or taken from the device; turning an address into a map pin needs a geocoding service.
+- **Email delivery of sign-in links.** Links are copied and texted by the GM for now.

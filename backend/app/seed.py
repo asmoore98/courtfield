@@ -9,13 +9,17 @@ import random
 import uuid
 from datetime import datetime, timedelta, time
 
+from . import config
+from .auth import hash_password
 from .db import Base, SessionLocal, engine
 from .models import (
     Company, CourtType, Job, JobStatus, JobTask, Role, ScopeType, TaskType, TimeEntry, User, utcnow,
 )
 
 # Dev tokens. Sign in on the front end by pasting one of these.
-TOKENS = {
+# Sample sign-ins (development only). Every sample account uses DEV_PASSWORD.
+DEV_PASSWORD = "courtfield-dev"
+ACCOUNTS = {
     "dev-gm": ("Sam Ortiz", Role.gm, 0),
     "dev-owner": ("Pat Lin", Role.owner, 0),
     "dev-estimator": ("Riley Shaw", Role.estimator, 0),
@@ -77,7 +81,14 @@ def _workday_entries(rng, job, tasks_hours, crew, start_day, lead):
     return entries
 
 
+def dev_email(key: str) -> str:
+    """dev-lead-1 -> lead-1@sample.test"""
+    return f"{key.removeprefix('dev-')}@sample.test"
+
+
 def seed() -> None:
+    if not config.IS_DEV:
+        raise SystemExit("Refusing to load sample data: COURTFIELD_ENV is not 'dev'. This would wipe the database.")
     rng = random.Random(7)
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
@@ -88,16 +99,18 @@ def seed() -> None:
     db.flush()
 
     users = {}
-    for token, (name, role, cost) in TOKENS.items():
-        users[token] = User(company_id=co.id, name=name, role=role, hourly_cost=cost, api_token=token)
-    crew = [User(company_id=co.id, name=n, role=Role.crew, hourly_cost=c, api_token=f"nologin-{uuid.uuid4()}") for n, c in CREW]
+    pw = hash_password(DEV_PASSWORD)
+    for key, (name, role, cost) in ACCOUNTS.items():
+        users[key] = User(company_id=co.id, name=name, role=role, hourly_cost=cost,
+                          email=dev_email(key), password_hash=pw)
+    crew = [User(company_id=co.id, name=n, role=Role.crew, hourly_cost=c) for n, c in CREW]
     db.add_all([*users.values(), *crew])
 
     # A second tenant, so isolation is visible in development too.
     other = Company(name="Other Contractor (tenant isolation check)")
     db.add(other)
     db.flush()
-    db.add(User(company_id=other.id, name="Other GM", role=Role.gm, api_token="dev-other-gm"))
+    db.add(User(company_id=other.id, name="Other GM", role=Role.gm, email=dev_email("dev-other-gm"), password_hash=pw))
     db.flush()
 
     today = utcnow().date()
@@ -131,7 +144,7 @@ def seed() -> None:
                 ))
     db.commit()
     db.close()
-    print("Seeded sample data. Dev tokens:", ", ".join(TOKENS))
+    print(f"Seeded sample data. Sign in as any of {', '.join(dev_email(k) for k in ACCOUNTS)} with password {DEV_PASSWORD}")
 
 
 if __name__ == "__main__":

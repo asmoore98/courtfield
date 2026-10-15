@@ -3,7 +3,7 @@
 // real API's routes, roles and rules closely enough to try every screen.
 // Built only when VITE_DEMO=1. Data is fictional and lives in this browser.
 
-const STORE_KEY = "cf.demo.db";
+const STORE_KEY = "cf.demo.db.v2"; // bump when the sample data shape changes
 const HOUR = 3600e3;
 const OFF_SITE_METERS = 400;
 
@@ -18,11 +18,11 @@ function seed() {
   const now = Date.now();
   const company = { id: "co-sample", name: "Sample Court Builders" };
   const users = [
-    { id: "u-gm", name: "Sam Ortiz", role: "gm", hourly_cost: 0, token: "dev-gm" },
-    { id: "u-owner", name: "Pat Lin", role: "owner", hourly_cost: 0, token: "dev-owner" },
-    { id: "u-est", name: "Riley Shaw", role: "estimator", hourly_cost: 0, token: "dev-estimator" },
-    { id: "u-lead1", name: "Marco Diaz", role: "crew_lead", hourly_cost: 38, token: "dev-lead-1" },
-    { id: "u-lead2", name: "Jordan Kemp", role: "crew_lead", hourly_cost: 36, token: "dev-lead-2" },
+    { id: "u-gm", name: "Sam Ortiz", role: "gm", hourly_cost: 0, email: "gm@sample.test", password: "courtfield-dev" },
+    { id: "u-owner", name: "Pat Lin", role: "owner", hourly_cost: 0, email: "owner@sample.test", password: "courtfield-dev" },
+    { id: "u-est", name: "Riley Shaw", role: "estimator", hourly_cost: 0, email: "estimator@sample.test", password: "courtfield-dev" },
+    { id: "u-lead1", name: "Marco Diaz", role: "crew_lead", hourly_cost: 38, email: "lead-1@sample.test", password: "courtfield-dev" },
+    { id: "u-lead2", name: "Jordan Kemp", role: "crew_lead", hourly_cost: 36, email: "lead-2@sample.test", password: "courtfield-dev" },
     { id: "u-c1", name: "Luis Vega", role: "crew", hourly_cost: 27 },
     { id: "u-c2", name: "Tyler Brooks", role: "crew", hourly_cost: 25 },
     { id: "u-c3", name: "Andre Wells", role: "crew", hourly_cost: 26 },
@@ -84,7 +84,8 @@ function seed() {
       clock_in: iso(start), clock_out: null, in_lat: coral.lat, in_lng: coral.lng, out_lat: null, out_lng: null,
       note: "", client_updated_at: iso(start) });
   }
-  return { company, users, jobs, time, changes: [] };
+  for (const u of users) { u.active = true; u.email ??= null; u.password ??= null; }
+  return { company, users, jobs, time, changes: [], sessions: {}, invites: {} };
 }
 
 let db;
@@ -93,6 +94,8 @@ function load() {
   try { db = JSON.parse(localStorage.getItem(STORE_KEY)); } catch {}
   if (!db) { db = seed(); save(); }
   db.changes ??= [];
+  db.sessions ??= {};
+  db.invites ??= {};
   return db;
 }
 function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(db)); } catch {} }
@@ -319,7 +322,7 @@ function route(method, path, query, body, user) {
   }
 
   if (method === "GET" && path === "/api/crew")
-    return db.users.filter((u) => FIELD.includes(u.role)).map(({ id, name, role }) => ({ id, name, role })).sort((a, b) => a.name.localeCompare(b.name));
+    return db.users.filter((u) => u.active !== false && FIELD.includes(u.role)).map(({ id, name, role }) => ({ id, name, role })).sort((a, b) => a.name.localeCompare(b.name));
 
   if (method === "POST" && path === "/api/time/sync") {
     need(ENTERS_TIME.includes(user.role), 403, "Your role can't do that");
@@ -362,14 +365,113 @@ function route(method, path, query, body, user) {
   throw new HttpError(404, "Not found");
 }
 
+// ---------- sign-in and team (mirror backend/app/routers/auth.py, team.py) ----------
+
+const SIGNS_IN = ["owner", "gm", "estimator", "crew_lead", "warehouse"];
+const meOut = (u) => ({ id: u.id, name: u.name, role: u.role, company_id: db.company.id, company_name: db.company.name,
+  sees_dollars: SEES_DOLLARS.includes(u.role), enters_time: ENTERS_TIME.includes(u.role), edits_jobs: EDITS_JOBS.includes(u.role) });
+function startSession(u, device) {
+  const t = uid();
+  db.sessions[t] = { user_id: u.id, device: device ?? "", last: iso(Date.now()) };
+  return t;
+}
+function revoke(userId) { for (const [t, s] of Object.entries(db.sessions)) if (s.user_id === userId) delete db.sessions[t]; }
+function invite(u) {
+  for (const [t, i] of Object.entries(db.invites)) if (i.user_id === u.id) delete db.invites[t];
+  const t = uid().replace(/[^\w-]/g, "");
+  db.invites[t] = { user_id: u.id, expires: Date.now() + 7 * 864e5 };
+  return `${location.href.split("#")[0]}#invite-${t}`;
+}
+function findInvite(t) {
+  const i = db.invites[t];
+  const u = i && db.users.find((x) => x.id === i.user_id);
+  need(i && i.expires > Date.now() && u?.active !== false, 404, "This link has expired or was already used. Ask your manager for a new one.");
+  return [i, u];
+}
+const person = (u) => ({ id: u.id, name: u.name, role: u.role, email: u.email ?? null, hourly_cost: u.hourly_cost ?? 0,
+  active: u.active !== false, signs_in: SIGNS_IN.includes(u.role), has_password: !!u.password,
+  devices: Object.values(db.sessions).filter((s) => s.user_id === u.id).length,
+  last_seen: Object.values(db.sessions).filter((s) => s.user_id === u.id).map((s) => s.last).sort().pop() ?? null });
+const emailOk = (e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
+function cleanEmail(e, selfId) {
+  if (!e || !e.trim()) return null;
+  e = e.trim().toLowerCase();
+  need(emailOk(e), 422, "That email address doesn't look right.");
+  need(!db.users.some((u) => u.email === e && u.id !== selfId), 409, "Someone already uses that email to sign in.");
+  return e;
+}
+
+function publicRoute(method, path, body) {
+  let m;
+  if (method === "POST" && path === "/api/auth/login") {
+    const u = db.users.find((x) => x.email && x.email === (body.email ?? "").trim().toLowerCase());
+    need(u && u.active !== false && SIGNS_IN.includes(u.role) && u.password === body.password, 401,
+      "That email and password don't match. Check them, or ask your manager for a new sign-in link.");
+    return { token: startSession(u, body.device), me: meOut(u) };
+  }
+  if ((m = path.match(/^\/api\/auth\/invite\/([\w-]+)$/))) {
+    const [, u] = findInvite(m[1]);
+    if (method === "GET") return { name: u.name, email: u.email, company_name: db.company.name, resetting: !!u.password };
+    need((body.password ?? "").length >= 8, 422, "Check the form: string should have at least 8 characters.");
+    u.password = body.password;
+    delete db.invites[m[1]];
+    revoke(u.id);
+    return { token: startSession(u, body.device), me: meOut(u) };
+  }
+  return undefined;
+}
+
+function teamRoute(method, path, body, user, token) {
+  let m;
+  if (method === "POST" && path === "/api/auth/logout") { delete db.sessions[token]; return null; }
+  if (!path.startsWith("/api/team")) return undefined;
+  need(user.role === "gm", 403, "Your role can't do that");
+  if (method === "GET" && path === "/api/team")
+    return [...db.users].sort((a, b) => (b.active !== false) - (a.active !== false) || a.name.localeCompare(b.name)).map(person);
+  if (method === "POST" && path === "/api/team") {
+    const signs = SIGNS_IN.includes(body.role);
+    const email = cleanEmail(body.email);
+    need(!signs || email, 422, "Add an email so they can sign in. Crew members who don't use the app don't need one.");
+    const u = { id: uid(), name: body.name.trim(), role: body.role, hourly_cost: Number(body.hourly_cost) || 0, email: signs ? email : null, password: null, active: true };
+    db.users.push(u);
+    return { person: person(u), invite_url: signs ? invite(u) : null };
+  }
+  const u = (m = path.match(/^\/api\/team\/([^/]+)/)) && db.users.find((x) => x.id === m[1]);
+  need(u, 404, "Person not found");
+  if (method === "PATCH") {
+    need(!(u.id === user.id && (("role" in body && body.role !== u.role) || body.active === false)), 409,
+      "You can't change your own role or turn off your own access. Ask another GM.");
+    if (body.name) u.name = body.name.trim();
+    if ("hourly_cost" in body) u.hourly_cost = Number(body.hourly_cost) || 0;
+    if ("email" in body) u.email = cleanEmail(body.email, u.id);
+    if (body.role) u.role = body.role;
+    if (!SIGNS_IN.includes(u.role)) { u.email = null; u.password = null; revoke(u.id); }
+    else need(u.email, 422, "Add an email so they can sign in with this role.");
+    if ("active" in body) { u.active = body.active; if (!u.active) revoke(u.id); }
+    return { person: person(u) };
+  }
+  if (method === "POST" && path.endsWith("/invite")) {
+    need(u.active !== false && SIGNS_IN.includes(u.role) && u.email, 409, "This person doesn't sign in. Give them a role that uses the app and an email first.");
+    return { person: person(u), invite_url: invite(u) };
+  }
+  if (method === "POST" && path.endsWith("/signout")) { revoke(u.id); return { person: person(u) }; }
+  throw new HttpError(404, "Not found");
+}
+
 export async function demoFetch(path, { method = "GET", body, token }) {
   load();
   await new Promise((r) => setTimeout(r, 120)); // feel like a network
   const url = new URL(path, "http://demo");
-  const user = db.users.find((u) => u.token && u.token === token);
+  const b = body ? JSON.parse(JSON.stringify(body)) : null;
   try {
-    if (!user) throw new HttpError(401, "That access code isn't recognized.");
-    const data = route(method, url.pathname, url.searchParams, body ? JSON.parse(JSON.stringify(body)) : null, user);
+    const pub = publicRoute(method, url.pathname, b ?? {});
+    if (pub !== undefined) { save(); return { ok: true, status: 200, data: pub }; }
+    const sess = token && db.sessions[token];
+    const user = sess && db.users.find((u) => u.id === sess.user_id && u.active !== false);
+    if (!user) throw new HttpError(401, "Your sign-in has ended. Sign in again.");
+    const team = teamRoute(method, url.pathname, b ?? {}, user, token);
+    if (team !== undefined) { save(); return { ok: true, status: 200, data: team }; }
+    const data = route(method, url.pathname, url.searchParams, b, user);
     if (method !== "GET") save();
     return { ok: true, status: 200, data: JSON.parse(JSON.stringify(data)) };
   } catch (e) {
