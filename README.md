@@ -36,6 +36,10 @@ To serve everything from one port instead, run `npm run build` in `frontend/`. T
 
 Sign in with a sample account from the sign-in screen: crew lead, general manager, owner or estimator.
 
+### Clickable preview without a server
+
+`npm run build:demo` in `frontend/` builds `dist-demo/index.html`, a single file with a stand-in server and the sample data inside it. It's for showing the app to someone: changes save only in that browser, and "Reset sample data" starts over.
+
 ## Tests
 
 ```bash

@@ -13,7 +13,15 @@ export class ApiError extends Error {
   }
 }
 
+export const DEMO = import.meta.env.VITE_DEMO === "1";
+
 export async function api(path, { method = "GET", body } = {}) {
+  if (DEMO) {
+    const { demoFetch } = await import("./demoServer.js");
+    const r = await demoFetch(path, { method, body, token: getToken() });
+    if (!r.ok) throw new ApiError(r.status, r.data.detail ?? "Request failed");
+    return r.data;
+  }
   let res;
   try {
     res = await fetch(path, {

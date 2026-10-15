@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, clearToken, getToken, safeGet, safeSet, setToken } from "./api";
+import { DEMO, api, clearToken, getToken, safeGet, safeSet, setToken } from "./api";
 import FieldView from "./FieldView";
 import OfficeView from "./OfficeView";
 
@@ -10,6 +10,23 @@ const DEV_ACCOUNTS = [
   ["dev-owner", "Owner"],
   ["dev-estimator", "Estimator"],
 ];
+
+function DemoBanner() {
+  if (!DEMO) return null;
+  async function reset() {
+    const { resetDemo } = await import("./demoServer.js");
+    resetDemo();
+    location.reload();
+  }
+  return (
+    <div className="demo-banner">
+      <span>Preview with sample data. Changes are saved only in this browser.</span>
+      <button className="link" onClick={reset}>
+        Reset sample data
+      </button>
+    </div>
+  );
+}
 
 function SignIn({ onSignedIn }) {
   const [token, setTok] = useState("");
@@ -27,6 +44,8 @@ function SignIn({ onSignedIn }) {
   }
 
   return (
+    <>
+    <DemoBanner />
     <main className="signin">
       <h1 className="wordmark">Courtfield</h1>
       <p className="signin-lede">Crew hours by task, measured against the estimate.</p>
@@ -54,6 +73,7 @@ function SignIn({ onSignedIn }) {
         ))}
       </div>
     </main>
+    </>
   );
 }
 
@@ -88,6 +108,7 @@ export default function App() {
 
   return (
     <div className="app">
+      <DemoBanner />
       <header className="topbar">
         <span className="wordmark small">Courtfield</span>
         {canField && canOffice && (

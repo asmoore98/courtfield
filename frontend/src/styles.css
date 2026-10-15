@@ -40,6 +40,21 @@
   }
 }
 
+:root[data-theme="dark"] {
+  --page: #161a1f;
+  --panel: #1f252c;
+  --rule: #333c45;
+  --asphalt: #e9eef2;
+  --muted: #9eabb6;
+  --court: #3f7dcc;
+  --court-deep: #2c64ad;
+  --court-tint: #22344b;
+  --under: #4cb27a;
+  --near: #e0a03a;
+  --over: #e5675a;
+  color-scheme: dark;
+}
+
 * { box-sizing: border-box; }
 html, body { margin: 0; }
 body {
@@ -92,6 +107,7 @@ h3 { font-size: 1.25rem; margin-bottom: 12px; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .lane-baseline { box-shadow: 0 0 0 1px #000; }
 }
+:root[data-theme="dark"] .lane-baseline { box-shadow: 0 0 0 1px #000; }
 
 .hours-text { font-family: var(--font-num); font-size: 1.05rem; white-space: nowrap; }
 .hours-text b { font-weight: 700; font-size: 1.2rem; }
@@ -317,4 +333,9 @@ tbody th { font-weight: 600; }
   .te-hours { grid-column: 3; }
   .te-tools { grid-column: 2 / -1; justify-content: flex-end; }
   .editor-actions .btn { flex: 1; }
+}
+
+.demo-banner {
+  display: flex; flex-wrap: wrap; gap: 4px 16px; justify-content: center; align-items: baseline;
+  padding: 8px 16px; background: var(--court-tint); color: var(--asphalt); font-size: 0.95rem; text-align: center;
 }
