@@ -1,7 +1,7 @@
 """Request and response shapes for the API."""
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from .models import CourtType, JobStatus, Role, ScopeType, TaskType
 
@@ -130,6 +130,16 @@ class TimeEntryOut(ORM):
     hours: float | None
     off_site: bool
     note: str
+    in_lat: float | None = None
+    in_lng: float | None = None
+    out_lat: float | None = None
+    out_lng: float | None = None
+    client_updated_at: datetime
+
+    @field_serializer("clock_in", "clock_out", "client_updated_at")
+    def _as_utc(self, v: datetime | None):
+        # Stored naive UTC; say so explicitly so browsers don't read it as local time.
+        return None if v is None else v.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 # ---------- costing ----------

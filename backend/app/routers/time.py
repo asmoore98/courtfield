@@ -139,6 +139,8 @@ def list_time(
                 clock_in=e.clock_in, clock_out=e.clock_out,
                 hours=round(entry_hours(e), 2) if e.clock_out else None,
                 off_site=is_off_site(e, job), note=e.note,
+                in_lat=e.in_lat, in_lng=e.in_lng, out_lat=e.out_lat, out_lng=e.out_lng,
+                client_updated_at=e.client_updated_at,
             )
         )
     return out
