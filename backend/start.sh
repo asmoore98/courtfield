@@ -1,6 +1,7 @@
 #!/bin/sh
 # Container entry point: bring the database schema up to date, then serve.
 set -e
+python -m app.admin wait-for-db
 alembic upgrade head
 python -m app.admin bootstrap
 exec uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}" --proxy-headers --forwarded-allow-ips="*"

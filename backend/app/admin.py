@@ -7,6 +7,10 @@
     python -m app.admin signin-link --email you@example.com
         Prints a fresh password link, e.g. if the only GM is locked out.
 
+    python -m app.admin wait-for-db
+        Waits up to 3 minutes for the database to accept connections. Run at
+        start, since a new database can still be starting when the app boots.
+
     python -m app.admin bootstrap
         Run at every start (see start.sh). If the database has no company yet
         and INITIAL_COMPANY, INITIAL_GM_NAME and INITIAL_GM_EMAIL are set, it
@@ -51,6 +55,32 @@ def signin_link(email: str) -> None:
     print(f"Password link for {user.name}:\n\n  {url}\n")
 
 
+def wait_for_db(timeout_s: int = 180) -> None:
+    import time
+
+    from sqlalchemy import text
+    from sqlalchemy.exc import OperationalError
+
+    from .db import engine
+
+    deadline = time.monotonic() + timeout_s
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("select 1"))
+            if attempt > 1:
+                print(f"Database is up (after {attempt} tries).")
+            return
+        except OperationalError as e:
+            if time.monotonic() > deadline:
+                sys.exit(f"Database still not reachable after {timeout_s}s: {e.orig}")
+            if attempt == 1:
+                print("Waiting for the database to accept connections...")
+            time.sleep(3)
+
+
 def bootstrap() -> None:
     company, name, email = (os.environ.get(k, "").strip() for k in ("INITIAL_COMPANY", "INITIAL_GM_NAME", "INITIAL_GM_EMAIL"))
     with SessionLocal() as db:
@@ -75,8 +105,11 @@ def main() -> None:
     s = sub.add_parser("signin-link", help="new password link for an existing person")
     s.add_argument("--email", required=True)
     sub.add_parser("bootstrap", help="first-start setup from INITIAL_* environment variables")
+    sub.add_parser("wait-for-db", help="wait until the database accepts connections")
     a = p.parse_args()
-    if a.cmd == "bootstrap":
+    if a.cmd == "wait-for-db":
+        wait_for_db()
+    elif a.cmd == "bootstrap":
         bootstrap()
     elif a.cmd == "create-company":
         create_company(a.company, a.name, a.email)
