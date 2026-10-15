@@ -78,11 +78,78 @@ const blankJob = () => ({
   scope_type: "resurfacing",
   contract_amount: "",
   estimated_labor_rate: "",
+  sales_tax_pct: "",
   tasks: starterTasks("pickleball", "resurfacing"),
+  cost_lines: [],
 });
+
+export const COST_CATEGORIES = [
+  ["material", "Material"],
+  ["equipment", "Rental"],
+  ["subcontractor", "Sub"],
+  ["other", "Other"],
+];
+const UNITS = ["pail", "gal", "drum", "bag", "lb", "ton", "SF", "LF", "roll", "each", "set", "day", "hr", "job"];
+const newKey = () => crypto.randomUUID?.() ?? String(Math.random());
+const blankLine = (category = "material") => ({ key: newKey(), category, description: "", quantity: "", unit: category === "material" ? "pail" : category === "equipment" ? "day" : "job", unit_cost: "", task_key: "" });
+
+export function estimateOf(job) {
+  const n = (v) => (v === "" || v == null ? 0 : Number(v));
+  const hours = job.tasks.reduce((s, t) => s + n(t.estimated_hours), 0);
+  const labor = hours * n(job.estimated_labor_rate);
+  const cat = { material: 0, equipment: 0, subcontractor: 0, other: 0 };
+  for (const c of job.cost_lines ?? []) cat[c.category] += n(c.quantity) * n(c.unit_cost);
+  const sales_tax = (cat.material * n(job.sales_tax_pct)) / 100;
+  const total_cost = labor + cat.material + sales_tax + cat.equipment + cat.subcontractor + cat.other;
+  const contract = n(job.contract_amount);
+  const profit = contract - total_cost;
+  return { hours, labor, ...cat, sales_tax, total_cost, contract, profit, margin_pct: contract > 0 ? profit / contract : null };
+}
 
 const num = (v) => (v === "" || v == null ? 0 : Number(v));
 const money = (n) => n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+const money2 = (n) => n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+
+// Cost breakdown and expected profit. Shared by the editor and the job page.
+export function EstimateTable({ est, taxPct }) {
+  const rows = [
+    ["Labor", est.labor, `${Math.round(est.hours * 10) / 10} crew hours`],
+    ["Materials", est.material],
+    ["Sales tax on materials", est.sales_tax, taxPct ? `${taxPct}%` : null],
+    ["Equipment rentals", est.equipment],
+    ["Subcontractors", est.subcontractor],
+    ["Other costs", est.other],
+  ].filter(([, v], i) => i < 2 || v > 0);
+  const tone = est.margin_pct == null ? "" : est.profit < 0 ? "t-over" : est.margin_pct < 0.15 ? "t-near" : "t-under";
+  return (
+    <table className="est-table">
+      <tbody>
+        {rows.map(([label, v, note]) => (
+          <tr key={label}>
+            <th scope="row">{label}{note && <span className="sub-inline"> · {note}</span>}</th>
+            <td className="num">{money(v)}</td>
+            <td className="num est-share">{est.total_cost > 0 ? `${Math.round((v / est.total_cost) * 100)}%` : ""}</td>
+          </tr>
+        ))}
+        <tr className="est-total">
+          <th scope="row">Total estimated cost</th>
+          <td className="num">{money(est.total_cost)}</td>
+          <td />
+        </tr>
+        <tr>
+          <th scope="row">Contract</th>
+          <td className="num">{est.contract ? money(est.contract) : "Not set"}</td>
+          <td />
+        </tr>
+        <tr className={`est-profit ${tone}`}>
+          <th scope="row">Expected profit</th>
+          <td className="num">{est.contract ? money(est.profit) : ""}</td>
+          <td className="num">{est.margin_pct != null ? `${Math.round(est.margin_pct * 1000) / 10}% margin` : ""}</td>
+        </tr>
+      </tbody>
+    </table>
+  );
+}
 
 export default function JobEditor({ jobId, onDone, onCancel }) {
   const [job, setJob] = useState(jobId ? null : blankJob);
@@ -99,19 +166,15 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
           ...j,
           contract_amount: j.contract_amount ?? "",
           estimated_labor_rate: j.estimated_labor_rate ?? "",
+          sales_tax_pct: j.sales_tax_pct || "",
           tasks: j.tasks.map((t) => ({ ...t, key: t.id })),
+          cost_lines: (j.cost_lines ?? []).map((c) => ({ ...c, key: c.id, task_key: c.task_id ?? "" })),
         })
       )
       .catch((e) => setError(e.message));
   }, [jobId]);
 
-  const totals = useMemo(() => {
-    if (!job) return null;
-    const hours = job.tasks.reduce((s, t) => s + num(t.estimated_hours), 0);
-    const labor = hours * num(job.estimated_labor_rate);
-    const contract = num(job.contract_amount);
-    return { hours, labor, share: contract > 0 ? labor / contract : null };
-  }, [job]);
+  const est = useMemo(() => (job ? estimateOf(job) : null), [job]);
 
   if (!job) return <p className="empty">{error ? `Couldn't load the job: ${error}` : "Loading job…"}</p>;
 
@@ -134,6 +197,10 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
       tasks: [...j.tasks, { key: crypto.randomUUID?.() ?? String(Math.random()), task_type: "other", name: "", estimated_hours: "" }],
     }));
   };
+
+  const setLine = (i, k, v) => setJob((j) => ({ ...j, cost_lines: j.cost_lines.map((c, n) => (n === i ? { ...c, [k]: v } : c)) }));
+  const removeLine = (i) => setJob((j) => ({ ...j, cost_lines: j.cost_lines.filter((_, n) => n !== i) }));
+  const addLine = (category) => setJob((j) => ({ ...j, cost_lines: [...j.cost_lines, blankLine(category)] }));
 
   // On a new job, picking court type or scope swaps in the matching starter
   // list until someone edits the tasks by hand.
@@ -158,6 +225,8 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
     setError(null);
     const missing = job.tasks.findIndex((t) => !t.name.trim());
     if (missing >= 0) return setError(`Task ${missing + 1} needs a name.`);
+    const noDesc = job.cost_lines.findIndex((c) => !c.description.trim());
+    if (noDesc >= 0) return setError(`Cost line ${noDesc + 1} needs a description.`);
     setSaving(true);
     const body = {
       name: job.name.trim(),
@@ -169,6 +238,19 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
       scope_type: job.scope_type,
       contract_amount: num(job.contract_amount),
       estimated_labor_rate: num(job.estimated_labor_rate),
+      sales_tax_pct: num(job.sales_tax_pct),
+      cost_lines: job.cost_lines.map((c) => {
+        const ti = c.task_key ? job.tasks.findIndex((t) => t.key === c.task_key) : -1;
+        return {
+          ...(c.id ? { id: c.id } : {}),
+          category: c.category,
+          description: c.description.trim(),
+          quantity: num(c.quantity),
+          unit: (c.unit ?? "").trim(),
+          unit_cost: num(c.unit_cost),
+          task_index: ti >= 0 ? ti : null,
+        };
+      }),
       tasks: job.tasks.map((t) => ({
         ...(t.id ? { id: t.id } : {}),
         task_type: t.task_type,
@@ -330,27 +412,96 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
           Add task
         </button>
 
-        <div className="totals">
-          <div>
-            <span className="fig">{Math.round(totals.hours * 10) / 10}</span>
-            <span className="fig-label">estimated crew hours</span>
-          </div>
-          <div>
-            <span className="fig">{money(totals.labor)}</span>
-            <span className="fig-label">estimated labor</span>
-          </div>
-          {totals.share != null && (
-            <div>
-              <span className="fig">{Math.round(totals.share * 100)}%</span>
-              <span className="fig-label">of contract is labor</span>
-            </div>
-          )}
-        </div>
+        <p className="subtotal">
+          <b>{Math.round(est.hours * 10) / 10} crew hours</b> at {money(num(job.estimated_labor_rate))}/hr = <b>{money(est.labor)}</b> labor
+        </p>
         {noHours > 0 && (
           <p className="help">
             {noHours === 1 ? "1 task has" : `${noHours} tasks have`} no estimated hours yet, so crew time on it won't have an estimate to compare against.
           </p>
         )}
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h3>Materials and other costs</h3>
+          <label className="inline-field">
+            Sales tax on materials
+            <span className="affix">
+              <input type="number" inputMode="decimal" min="0" max="20" step="0.25" value={job.sales_tax_pct} onChange={(e) => set("sales_tax_pct", e.target.value)} placeholder="0" aria-label="Sales tax on materials, percent" />
+              <span aria-hidden="true">%</span>
+            </span>
+          </label>
+        </div>
+        {job.cost_lines.length === 0 ? (
+          <p className="help">No lines yet. Add the coatings, sand, line paint, nets and posts, rentals and subs this job needs.</p>
+        ) : (
+          <ol className="line-edit">
+            <li className="line-head" aria-hidden="true">
+              <span>Item</span><span>Type</span><span>Qty</span><span>Unit</span><span>Cost per unit</span><span>Total</span><span>For task</span><span />
+            </li>
+            {job.cost_lines.map((c, i) => (
+              <li key={c.key}>
+                <label className="le-desc">
+                  <span className="sr-only">Line {i + 1} item</span>
+                  <input value={c.description} onChange={(e) => setLine(i, "description", e.target.value)} placeholder="e.g. Acrylic resurfacer" />
+                </label>
+                <label className="le-cat">
+                  <span className="sr-only">Line {i + 1} type</span>
+                  <select value={c.category} onChange={(e) => setLine(i, "category", e.target.value)}>
+                    {COST_CATEGORIES.map(([v, l]) => (
+                      <option key={v} value={v}>{l}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="le-qty">
+                  <span className="sr-only">Line {i + 1} quantity</span>
+                  <input type="number" inputMode="decimal" min="0" step="any" value={c.quantity} onChange={(e) => setLine(i, "quantity", e.target.value)} placeholder="0" />
+                </label>
+                <label className="le-unit">
+                  <span className="sr-only">Line {i + 1} unit</span>
+                  <input list="cf-units" value={c.unit} onChange={(e) => setLine(i, "unit", e.target.value)} placeholder="unit" maxLength={20} />
+                </label>
+                <label className="le-cost">
+                  <span className="sr-only">Line {i + 1} cost per unit</span>
+                  <span className="affix">
+                    <span aria-hidden="true">$</span>
+                    <input type="number" inputMode="decimal" min="0" step="0.01" value={c.unit_cost} onChange={(e) => setLine(i, "unit_cost", e.target.value)} placeholder="0.00" />
+                  </span>
+                </label>
+                <span className="le-total" aria-label={`Line ${i + 1} total`}>{money2(num(c.quantity) * num(c.unit_cost))}</span>
+                <label className="le-task">
+                  <span className="sr-only">Line {i + 1} task</span>
+                  <select value={c.task_key} onChange={(e) => setLine(i, "task_key", e.target.value)}>
+                    <option value="">Whole job</option>
+                    {job.tasks.map((t, ti) => (
+                      <option key={t.key} value={t.key}>{t.name || `Task ${ti + 1}`}</option>
+                    ))}
+                  </select>
+                </label>
+                <span className="te-tools le-tools">
+                  <button type="button" className="icon remove" onClick={() => removeLine(i)} aria-label={`Remove line ${i + 1}`}>✕</button>
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
+        <datalist id="cf-units">
+          {UNITS.map((u) => (
+            <option key={u} value={u} />
+          ))}
+        </datalist>
+        <div className="add-row">
+          <button type="button" className="btn-ghost" onClick={() => addLine("material")}>Add material</button>
+          <button type="button" className="btn-ghost" onClick={() => addLine("equipment")}>Add rental</button>
+          <button type="button" className="btn-ghost" onClick={() => addLine("subcontractor")}>Add subcontractor</button>
+          <button type="button" className="btn-ghost" onClick={() => addLine("other")}>Add other cost</button>
+        </div>
+      </section>
+
+      <section className="panel">
+        <h3>Estimate</h3>
+        <EstimateTable est={est} taxPct={num(job.sales_tax_pct)} />
       </section>
 
       {error && (

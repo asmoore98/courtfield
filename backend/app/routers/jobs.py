@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..auth import EDITS_JOBS, SEES_DOLLARS, current_user, require_roles
 from ..costing import job_costing
 from ..db import get_db
-from ..models import Job, JobStatus, JobTask, Role, TimeEntry, User
+from ..models import CostLine, Job, JobStatus, JobTask, Role, TimeEntry, User
 from ..schemas import JobCosting, JobEditOut, JobIn, JobOut, JobStatusIn, JobUpdate, TaskOutWithTime
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
@@ -17,7 +17,7 @@ def load_job(db: Session, user: User, job_id: str) -> Job:
     job = db.scalar(
         select(Job)
         .where(Job.id == job_id, Job.company_id == user.company_id)
-        .options(selectinload(Job.tasks))
+        .options(selectinload(Job.tasks), selectinload(Job.cost_lines))
     )
     if job is None:
         raise HTTPException(404, "Job not found")
@@ -29,7 +29,31 @@ def _serialize(job: Job, user: User) -> JobOut:
     if user.role not in SEES_DOLLARS:
         out.contract_amount = None
         out.estimated_labor_rate = None
+        out.sales_tax_pct = None
+        out.cost_lines = None
     return out
+
+
+def _apply_cost_lines(job: Job, lines, tasks_in_order: list[JobTask], company_id: str) -> None:
+    """Replace the job's cost lines with `lines`, keeping ids for lines sent
+    back with one. task_index points into this save's task list."""
+    existing = {c.id: c for c in job.cost_lines}
+    sent = {ln.id for ln in lines if ln.id}
+    if sent - set(existing):
+        raise HTTPException(422, "A cost line in this save doesn't belong to this job")
+    for cid in set(existing) - sent:
+        job.cost_lines.remove(existing[cid])
+    for order, ln in enumerate(lines):
+        if ln.task_index is not None and ln.task_index >= len(tasks_in_order):
+            raise HTTPException(422, f"Cost line {order + 1} points at a task that isn't in the job")
+        task = tasks_in_order[ln.task_index] if ln.task_index is not None else None
+        fields = dict(category=ln.category, description=ln.description.strip(), quantity=ln.quantity,
+                      unit=ln.unit.strip(), unit_cost=ln.unit_cost, sort_order=order, task_id=task.id if task else None)
+        if ln.id:
+            for k, v in fields.items():
+                setattr(existing[ln.id], k, v)
+        else:
+            job.cost_lines.append(CostLine(company_id=company_id, **fields))
 
 
 def _entries(db: Session, job: Job) -> list[TimeEntry]:
@@ -44,7 +68,7 @@ def _entries(db: Session, job: Job) -> list[TimeEntry]:
 
 @router.get("", response_model=list[JobOut], response_model_exclude_none=True)
 def list_jobs(status: JobStatus | None = None, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    q = select(Job).where(Job.company_id == user.company_id).options(selectinload(Job.tasks)).order_by(Job.created_at.desc())
+    q = select(Job).where(Job.company_id == user.company_id).options(selectinload(Job.tasks), selectinload(Job.cost_lines)).order_by(Job.created_at.desc())
     if status:
         q = q.where(Job.status == status)
     elif user.role == Role.crew_lead:
@@ -54,13 +78,15 @@ def list_jobs(status: JobStatus | None = None, user: User = Depends(current_user
 
 @router.post("", status_code=201, response_model=JobOut)
 def create_job(body: JobIn, user: User = Depends(require_roles(*EDITS_JOBS)), db: Session = Depends(get_db)):
-    data = body.model_dump(exclude={"tasks"})
+    data = body.model_dump(exclude={"tasks", "cost_lines"})
     if user.role != Role.gm:
         data["status"] = JobStatus.scheduled  # only the GM starts or closes jobs
     job = Job(company_id=user.company_id, **data)
     for i, t in enumerate(body.tasks):
         job.tasks.append(JobTask(company_id=user.company_id, sort_order=i, **t.model_dump(exclude={"id", "sort_order"})))
     db.add(job)
+    db.flush()  # task ids for cost lines
+    _apply_cost_lines(job, body.cost_lines, list(job.tasks), user.company_id)
     db.commit()
     return JobOut.model_validate(load_job(db, user, job.id))
 
@@ -69,7 +95,8 @@ def create_job(body: JobIn, user: User = Depends(require_roles(*EDITS_JOBS)), db
 def jobs_summary(user: User = Depends(require_roles(*SEES_DOLLARS)), db: Session = Depends(get_db)):
     """Estimate vs. actual for every job, for the management dashboard."""
     jobs = db.scalars(
-        select(Job).where(Job.company_id == user.company_id).options(selectinload(Job.tasks)).order_by(Job.created_at.desc())
+        select(Job).where(Job.company_id == user.company_id)
+        .options(selectinload(Job.tasks), selectinload(Job.cost_lines)).order_by(Job.created_at.desc())
     )
     return [job_costing(j, _entries(db, j), with_dollars=True) for j in jobs]
 
@@ -120,18 +147,28 @@ def update_job(job_id: str, body: JobUpdate, user: User = Depends(require_roles(
         names = ", ".join(sorted(existing[i].name for i in blocked))
         raise HTTPException(409, f"Crew time is logged on {names}, so it can't be removed. Set its hours instead.")
 
-    for k, v in body.model_dump(exclude={"tasks", "status"}).items():
+    for k, v in body.model_dump(exclude={"tasks", "status", "cost_lines"}).items():
         setattr(job, k, v)
     for i in removed:
+        for line in job.cost_lines:
+            if line.task_id == i:
+                line.task_id = None
         job.tasks.remove(existing[i])
+    in_order: list[JobTask] = []
     for order, t in enumerate(body.tasks):
         fields = t.model_dump(exclude={"id", "sort_order"})
         if t.id:
             for k, v in fields.items():
                 setattr(existing[t.id], k, v)
             existing[t.id].sort_order = order
+            in_order.append(existing[t.id])
         else:
-            job.tasks.append(JobTask(company_id=user.company_id, sort_order=order, **fields))
+            nt = JobTask(company_id=user.company_id, sort_order=order, **fields)
+            job.tasks.append(nt)
+            in_order.append(nt)
+    db.flush()  # ids for new tasks
+    if body.cost_lines is not None:
+        _apply_cost_lines(job, body.cost_lines, in_order, user.company_id)
     db.commit()
     db.expire(job)  # reload tasks in their new order
     return _edit_view(db, load_job(db, user, job.id))

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
-import JobEditor from "./JobEditor";
+import JobEditor, { COST_CATEGORIES, EstimateTable } from "./JobEditor";
 import TimeLog from "./TimeLog";
 import HoursBar, { HoursText, statusOf } from "./HoursBar";
 
@@ -78,6 +78,11 @@ function JobList({ me, onOpen, onNew }) {
                     </b>
                   )}
                 </span>
+                {j.estimate?.margin_pct != null && (
+                  <span className={j.estimate.profit < 0 ? "t-over" : j.estimate.margin_pct < 0.15 ? "t-near" : ""}>
+                    Est. margin {Math.round(j.estimate.margin_pct * 100)}%
+                  </span>
+                )}
               </span>
             </button>
           </li>
@@ -85,6 +90,59 @@ function JobList({ me, onOpen, onNew }) {
       })}
     </ul>
     </>
+  );
+}
+
+const CAT_LABEL = { ...Object.fromEntries(COST_CATEGORIES), equipment: "Equipment rental", subcontractor: "Subcontractor" };
+const money2 = (n) => n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+
+function EstimatePanel({ jobId, costing, version }) {
+  const { data: job } = useLoad(`/api/jobs/${jobId}`, [jobId, version]);
+  const est = { ...costing.estimate, hours: costing.estimated_hours };
+  const taskName = Object.fromEntries((job?.tasks ?? []).map((t) => [t.id, t.name]));
+  const lines = job?.cost_lines ?? [];
+  return (
+    <section className="panel">
+      <h3>Estimate</h3>
+      <div className="est-layout">
+        <EstimateTable est={est} taxPct={job?.sales_tax_pct ?? 0} />
+        <div className="est-lines">
+          <h4>Materials and other costs</h4>
+          {!lines.length ? (
+            <p className="help">No material or other cost lines yet. Add them with Edit job.</p>
+          ) : (
+            <div className="table-scroll">
+              <table className="lines-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Item</th>
+                    <th scope="col" className="num">Qty</th>
+                    <th scope="col" className="num">Per unit</th>
+                    <th scope="col" className="num">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lines.map((l) => (
+                    <tr key={l.id}>
+                      <th scope="row">
+                        {l.description}
+                        <span className="sub">
+                          {CAT_LABEL[l.category]}
+                          {l.task_id && taskName[l.task_id] ? ` · ${taskName[l.task_id]}` : ""}
+                        </span>
+                      </th>
+                      <td className="num">{l.quantity} {l.unit}</td>
+                      <td className="num">{money2(l.unit_cost)}</td>
+                      <td className="num">{money2(l.quantity * l.unit_cost)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -183,6 +241,8 @@ function JobDetail({ me, jobId, onBack, onEdit }) {
           </tbody>
         </table>
       </section>
+
+      {sees$ && c.estimate && <EstimatePanel jobId={jobId} costing={c} version={version} />}
 
       <TimeLog me={me} jobId={jobId} tasks={c.tasks} onChanged={() => setVersion((v) => v + 1)} />
     </div>

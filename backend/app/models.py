@@ -76,6 +76,13 @@ class TaskType(str, enum.Enum):
     other = "other"
 
 
+class CostCategory(str, enum.Enum):
+    material = "material"
+    equipment = "equipment"          # rentals: sprayers, lifts, dumpsters
+    subcontractor = "subcontractor"  # e.g. fencing or lighting sub
+    other = "other"                  # permits, freight, disposal
+
+
 class Company(Base):
     __tablename__ = "companies"
 
@@ -157,6 +164,12 @@ class Job(Base):
     estimated_labor_rate: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
+    # Florida contractors pay sales tax on materials; applied to material lines only.
+    sales_tax_pct: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+
+    cost_lines: Mapped[list[CostLine]] = relationship(
+        back_populates="job", order_by="CostLine.sort_order", cascade="all, delete-orphan"
+    )
     tasks: Mapped[list[JobTask]] = relationship(
         back_populates="job", order_by="JobTask.sort_order", cascade="all, delete-orphan"
     )
@@ -174,6 +187,26 @@ class JobTask(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
     job: Mapped[Job] = relationship(back_populates="tasks")
+
+
+class CostLine(Base):
+    """One estimated non-labor cost on a job: a material, a rental, a sub, or
+    anything else. Quantity x unit cost; materials also carry sales tax."""
+
+    __tablename__ = "cost_lines"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
+    task_id: Mapped[str | None] = mapped_column(ForeignKey("job_tasks.id", ondelete="SET NULL"), nullable=True)
+    category: Mapped[CostCategory] = mapped_column(Enum(CostCategory), default=CostCategory.material)
+    description: Mapped[str] = mapped_column(String(200))
+    quantity: Mapped[float] = mapped_column(Float, default=0.0)
+    unit: Mapped[str] = mapped_column(String(20), default="")
+    unit_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    job: Mapped[Job] = relationship(back_populates="cost_lines")
 
 
 class TimeEntry(Base):

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
-from .models import CourtType, JobStatus, Role, ScopeType, TaskType
+from .models import CostCategory, CourtType, JobStatus, Role, ScopeType, TaskType
 
 
 def to_naive_utc(value: datetime | None) -> datetime | None:
@@ -51,6 +51,28 @@ class TaskOut(ORM):
     sort_order: int
 
 
+class CostLineIn(BaseModel):
+    id: str | None = None
+    category: CostCategory = CostCategory.material
+    description: str = Field(min_length=1, max_length=200)
+    quantity: float = Field(ge=0, le=1_000_000)
+    unit: str = Field(default="", max_length=20)
+    unit_cost: float = Field(ge=0, le=10_000_000)
+    # Position of the linked task in this save's task list (new tasks have no id yet).
+    task_index: int | None = Field(default=None, ge=0)
+
+
+class CostLineOut(ORM):
+    id: str
+    category: CostCategory
+    description: str
+    quantity: float
+    unit: str
+    unit_cost: float
+    task_id: str | None
+    sort_order: int
+
+
 class JobIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     client: str = ""
@@ -62,14 +84,18 @@ class JobIn(BaseModel):
     status: JobStatus = JobStatus.scheduled
     contract_amount: float = Field(default=0, ge=0)
     estimated_labor_rate: float = Field(default=0, ge=0)
+    sales_tax_pct: float = Field(default=0, ge=0, le=20)
     tasks: list[TaskIn] = Field(default=[], max_length=100)
+    cost_lines: list[CostLineIn] = Field(default=[], max_length=300)
 
 
 class JobUpdate(JobIn):
     """Full replacement of a job's details and task list. Status changes go
-    through PATCH /status (GM only), so status here is ignored."""
+    through PATCH /status (GM only), so status here is ignored. Leaving
+    cost_lines out keeps the job's lines as they are."""
 
     status: JobStatus | None = None
+    cost_lines: list[CostLineIn] | None = Field(default=None, max_length=300)
 
 
 class JobStatusIn(BaseModel):
@@ -94,6 +120,8 @@ class JobOut(ORM):
     # Only filled in for roles that see dollars; omitted otherwise.
     contract_amount: float | None = None
     estimated_labor_rate: float | None = None
+    sales_tax_pct: float | None = None
+    cost_lines: list[CostLineOut] | None = None
 
 
 class JobEditOut(JobOut):
@@ -235,6 +263,8 @@ class JobCosting(BaseModel):
     actual_labor_cost: float | None = None
     labor_cost_used_pct: float | None = None
     labor_variance: float | None = None  # complete jobs only; positive = over budget
+    # Estimate summary (dollars roles only)
+    estimate: dict | None = None
 
 
 # ---------- sign-in ----------

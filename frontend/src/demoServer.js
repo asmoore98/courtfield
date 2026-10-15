@@ -3,7 +3,7 @@
 // real API's routes, roles and rules closely enough to try every screen.
 // Built only when VITE_DEMO=1. Data is fictional and lives in this browser.
 
-const STORE_KEY = "cf.demo.db.v2"; // bump when the sample data shape changes
+const STORE_KEY = "cf.demo.db.v3"; // bump when the sample data shape changes
 const HOUR = 3600e3;
 const OFF_SITE_METERS = 400;
 
@@ -74,7 +74,20 @@ function seed() {
       }
     }
   }
-  const [palm, west, coral] = jobs;
+  const [palm, west, coral, sea] = jobs;
+  // Sample cost lines (made-up prices): [category, description, qty, unit, unit cost, task index]
+  const lines = (job, rows) => {
+    job.sales_tax_pct = 7;
+    job.cost_lines = rows.map(([category, description, quantity, unit, unit_cost, ti], i) =>
+      ({ id: uid(), category, description, quantity, unit, unit_cost, task_id: ti == null ? null : job.tasks[ti].id, sort_order: i }));
+  };
+  for (const j of jobs) { j.sales_tax_pct = 0; j.cost_lines = []; }
+  lines(coral, [["material", "Acrylic resurfacer", 30, "pail", 120, 1], ["material", "Color coat concentrate", 24, "pail", 150, 2],
+    ["material", "Line paint", 4, "gal", 55, 3], ["material", "Silica sand", 40, "bag", 9, 1], ["material", "Tennis posts and nets", 2, "set", 650, 5],
+    ["subcontractor", "10' chain-link fence (sub)", 1, "job", 18500, 4], ["equipment", "Pressure washer rental", 2, "day", 110, 0],
+    ["other", "Disposal and freight", 1, "job", 450, null]]);
+  lines(sea, [["material", "Crack filler", 6, "gal", 38, 1], ["material", "Acrylic resurfacer", 5, "pail", 120, 2],
+    ["material", "Color coat concentrate", 4, "pail", 150, 3], ["material", "Line paint", 1, "gal", 55, 4]]);
   spread(palm, palm.tasks.map((t) => [t, t.estimated_hours * 1.18 * (0.85 + rand() * 0.3)]), teamA, "u-lead1", 30);
   spread(west, west.tasks.map((t) => [t, t.estimated_hours * 0.94 * (0.85 + rand() * 0.3)]), teamB, "u-lead2", 18);
   spread(coral, [[coral.tasks[0], 13.5], [coral.tasks[1], 18]], teamA, "u-lead1", 4);
@@ -132,8 +145,34 @@ const tone = (u) => (u == null ? "no_estimate" : u > 1 ? "over" : u >= 0.9 ? "ne
 function jobOut(j, user) {
   const { created_at, ...rest } = j;
   const out = { ...rest, tasks: [...j.tasks].sort((a, b) => a.sort_order - b.sort_order) };
-  if (!SEES_DOLLARS.includes(user.role)) { delete out.contract_amount; delete out.estimated_labor_rate; }
+  out.cost_lines = [...(j.cost_lines ?? [])].sort((a, b) => a.sort_order - b.sort_order);
+  out.sales_tax_pct = j.sales_tax_pct ?? 0;
+  if (!SEES_DOLLARS.includes(user.role)) { delete out.contract_amount; delete out.estimated_labor_rate; delete out.cost_lines; delete out.sales_tax_pct; }
   return out;
+}
+
+function estimateSummary(j) {
+  const cat = { material: 0, equipment: 0, subcontractor: 0, other: 0 };
+  for (const c of j.cost_lines ?? []) cat[c.category] += c.quantity * c.unit_cost;
+  const labor = j.tasks.reduce((s, t) => s + t.estimated_hours, 0) * j.estimated_labor_rate;
+  const tax = (cat.material * (j.sales_tax_pct ?? 0)) / 100;
+  const total = labor + cat.material + tax + cat.equipment + cat.subcontractor + cat.other;
+  const contract = j.contract_amount ?? 0;
+  return { labor: r2(labor), material: r2(cat.material), sales_tax: r2(tax), equipment: r2(cat.equipment), subcontractor: r2(cat.subcontractor),
+    other: r2(cat.other), total_cost: r2(total), contract: r2(contract), profit: r2(contract - total),
+    margin_pct: contract > 0 ? Math.round(((contract - total) / contract) * 1e4) / 1e4 : null };
+}
+
+function applyLines(j, lines, tasksInOrder) {
+  if (!lines) return;
+  const byId = Object.fromEntries((j.cost_lines ?? []).map((c) => [c.id, c]));
+  need(lines.every((l) => !l.id || byId[l.id]), 422, "A cost line in this save doesn't belong to this job");
+  j.cost_lines = lines.map((l, i) => {
+    need(l.task_index == null || l.task_index < tasksInOrder.length, 422, `Cost line ${i + 1} points at a task that isn't in the job`);
+    need((l.description ?? "").trim(), 422, "Every cost line needs a description");
+    return { id: l.id ?? uid(), category: l.category ?? "material", description: l.description.trim(), quantity: Number(l.quantity) || 0,
+      unit: (l.unit ?? "").trim(), unit_cost: Number(l.unit_cost) || 0, task_id: l.task_index == null ? null : tasksInOrder[l.task_index].id, sort_order: i };
+  });
 }
 
 function costing(j, withDollars) {
@@ -163,7 +202,7 @@ function costing(j, withDollars) {
     const ec = r2(est * j.estimated_labor_rate), ac = r2(Object.values(cost).reduce((s, v) => s + v, 0));
     Object.assign(out, { contract_amount: j.contract_amount, estimated_labor_cost: ec, actual_labor_cost: ac,
       labor_cost_used_pct: ec > 0 ? Math.round((ac / ec) * 1e4) / 1e4 : null,
-      labor_variance: j.status === "complete" ? r2(ac - ec) : null });
+      labor_variance: j.status === "complete" ? r2(ac - ec) : null, estimate: estimateSummary(j) });
   }
   return out;
 }
@@ -199,9 +238,9 @@ const SAME = ["job_id", "task_id", "worker_id", "clock_in", "clock_out", "in_lat
 const norm = (k, v) => (v == null ? null : ["clock_in", "clock_out"].includes(k) ? Date.parse(v) : v);
 
 function jobFields(body) {
-  const pick = ["name", "client", "address", "lat", "lng", "court_type", "scope_type", "contract_amount", "estimated_labor_rate"];
+  const pick = ["name", "client", "address", "lat", "lng", "court_type", "scope_type", "contract_amount", "estimated_labor_rate", "sales_tax_pct"];
   need(typeof body.name === "string" && body.name.trim(), 422, "Job name is required");
-  return Object.fromEntries(pick.map((k) => [k, body[k] ?? (["lat", "lng"].includes(k) ? null : k.endsWith("amount") || k.endsWith("rate") ? 0 : "")]));
+  return Object.fromEntries(pick.map((k) => [k, body[k] ?? (["lat", "lng"].includes(k) ? null : k.endsWith("amount") || k.endsWith("rate") || k.endsWith("pct") ? 0 : "")]));
 }
 
 const findEntry = (id) => { const e = db.time.find((x) => x.id === id); need(e, 404, "Time entry not found"); return e; };
@@ -239,7 +278,9 @@ function route(method, path, query, body, user) {
   if (method === "POST" && path === "/api/jobs") {
     need(EDITS_JOBS.includes(user.role), 403, "Your role can't do that");
     const j = { id: uid(), ...jobFields(body), status: user.role === "gm" ? body.status ?? "scheduled" : "scheduled", created_at: Date.now(),
-      tasks: (body.tasks ?? []).map((t, i) => ({ id: uid(), task_type: t.task_type, name: t.name, estimated_hours: t.estimated_hours ?? 0, sort_order: i })) };
+      tasks: (body.tasks ?? []).map((t, i) => ({ id: uid(), task_type: t.task_type, name: t.name, estimated_hours: t.estimated_hours ?? 0, sort_order: i })),
+      cost_lines: [] };
+    applyLines(j, body.cost_lines ?? [], j.tasks);
     db.jobs.push(j);
     return jobOut(j, user);
   }
@@ -275,6 +316,9 @@ function route(method, path, query, body, user) {
       need(!blocked.length, 409, `Crew time is logged on ${blocked.join(", ")}, so it can't be removed. Set its hours instead.`);
       Object.assign(j, jobFields(body));
       j.tasks = body.tasks.map((t, i) => ({ id: t.id ?? uid(), task_type: t.task_type, name: t.name, estimated_hours: t.estimated_hours ?? 0, sort_order: i }));
+      const live = new Set(j.tasks.map((t) => t.id));
+      for (const c of j.cost_lines ?? []) if (c.task_id && !live.has(c.task_id)) c.task_id = null;
+      applyLines(j, body.cost_lines, j.tasks);
       return editView(j, user);
     }
   }

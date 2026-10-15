@@ -5,7 +5,7 @@ import math
 from collections import defaultdict
 from datetime import datetime
 
-from .models import Job, JobStatus, TimeEntry, utcnow
+from .models import CostCategory, Job, JobStatus, TimeEntry, utcnow
 
 NEAR_THRESHOLD = 0.90   # at or above 90% of estimated hours -> "near"
 OFF_SITE_METERS = 400   # GPS stamp farther than this from the job pin -> flagged
@@ -41,6 +41,30 @@ def _status(used_pct: float | None) -> str:
     if used_pct >= NEAR_THRESHOLD:
         return "near"
     return "under"
+
+
+def estimate_summary(job: Job) -> dict:
+    """What the job is expected to cost and earn, from the estimate alone."""
+    by_cat = {c.value: 0.0 for c in CostCategory}
+    for line in job.cost_lines:
+        by_cat[line.category.value] += line.quantity * line.unit_cost
+    labor = sum(t.estimated_hours for t in job.tasks) * job.estimated_labor_rate
+    sales_tax = by_cat["material"] * (job.sales_tax_pct or 0) / 100
+    total = labor + sum(by_cat.values()) + sales_tax
+    contract = job.contract_amount or 0
+    profit = contract - total
+    return {
+        "labor": round(labor, 2),
+        "material": round(by_cat["material"], 2),
+        "sales_tax": round(sales_tax, 2),
+        "equipment": round(by_cat["equipment"], 2),
+        "subcontractor": round(by_cat["subcontractor"], 2),
+        "other": round(by_cat["other"], 2),
+        "total_cost": round(total, 2),
+        "contract": round(contract, 2),
+        "profit": round(profit, 2),
+        "margin_pct": round(profit / contract, 4) if contract > 0 else None,
+    }
 
 
 def job_costing(job: Job, entries: list[TimeEntry], with_dollars: bool, now: datetime | None = None) -> dict:
@@ -102,5 +126,6 @@ def job_costing(job: Job, entries: list[TimeEntry], with_dollars: bool, now: dat
             # Only meaningful once the job is finished; mid-job, watch the
             # per-task hours instead.
             "labor_variance": round(act_cost - est_cost, 2) if job.status == JobStatus.complete else None,
+            "estimate": estimate_summary(job),
         }
     return out

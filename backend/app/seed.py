@@ -13,7 +13,7 @@ from . import config
 from .auth import hash_password
 from .db import Base, SessionLocal, engine
 from .models import (
-    Company, CourtType, Job, JobStatus, JobTask, Role, ScopeType, TaskType, TimeEntry, User, utcnow,
+    Company, CostCategory, CostLine, CourtType, Job, JobStatus, JobTask, Role, ScopeType, TaskType, TimeEntry, User, utcnow,
 )
 
 # Dev tokens. Sign in on the front end by pasting one of these.
@@ -81,6 +81,29 @@ def _workday_entries(rng, job, tasks_hours, crew, start_day, lead):
     return entries
 
 
+# Sample cost lines per JOBS index: (category, description, qty, unit, unit cost, task index or None).
+# Made-up prices for development only.
+M, E, S, O = CostCategory.material, CostCategory.equipment, CostCategory.subcontractor, CostCategory.other
+SAMPLE_LINES = {
+    2: [  # Coral Ridge, 2 tennis new build
+        (M, "Acrylic resurfacer", 30, "pail", 120.0, 1),
+        (M, "Color coat concentrate", 24, "pail", 150.0, 2),
+        (M, "Line paint", 4, "gal", 55.0, 3),
+        (M, "Silica sand", 40, "bag", 9.0, 1),
+        (M, "Tennis posts and nets", 2, "set", 650.0, 5),
+        (S, "10' chain-link fence (sub)", 1, "job", 18500.0, 4),
+        (E, "Pressure washer rental", 2, "day", 110.0, 0),
+        (O, "Disposal and freight", 1, "job", 450.0, None),
+    ],
+    3: [  # Seabreeze, basketball resurface
+        (M, "Crack filler", 6, "gal", 38.0, 1),
+        (M, "Acrylic resurfacer", 5, "pail", 120.0, 2),
+        (M, "Color coat concentrate", 4, "pail", 150.0, 3),
+        (M, "Line paint", 1, "gal", 55.0, 4),
+    ],
+}
+
+
 def dev_email(key: str) -> str:
     """dev-lead-1 -> lead-1@sample.test"""
     return f"{key.removeprefix('dev-')}@sample.test"
@@ -125,6 +148,10 @@ def seed() -> None:
             job.tasks.append(JobTask(company_id=co.id, task_type=tt, name=tname, estimated_hours=est, sort_order=n))
         db.add(job)
         db.flush()
+        for n, (cat, desc, qty, unit, cost, task_i) in enumerate(SAMPLE_LINES.get(i, [])):
+            job.cost_lines.append(CostLine(company_id=co.id, category=cat, description=desc, quantity=qty, unit=unit,
+                                           unit_cost=cost, sort_order=n, task_id=job.tasks[task_i].id if task_i is not None else None))
+        job.sales_tax_pct = 7.0 if i in SAMPLE_LINES else 0.0
 
         team, lead = (team_a, lead1) if i % 2 == 0 else (team_b, lead2)
         if status == JobStatus.complete:

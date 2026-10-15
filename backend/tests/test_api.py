@@ -308,3 +308,92 @@ def test_correction_rules(client):
     assert client.patch(f"/api/time/{e['id']}", json={"clock_out": iso(now()), "reason": "x"}, headers=auth(GM)).status_code == 422
     other_gm = client.patch(f"/api/time/{e['id']}", json={"clock_out": iso(now()), "reason": "Done for day"}, headers=auth(OTHER))
     assert other_gm.status_code == 404
+
+
+# ---------- cost lines and estimate ----------
+
+def _job_body(edit):
+    keys = ("name", "client", "address", "lat", "lng", "court_type", "scope_type", "contract_amount", "estimated_labor_rate", "sales_tax_pct")
+    return {k: edit[k] for k in keys}
+
+
+def test_estimate_summary_with_cost_lines(client):
+    body = {"name": "Line Test", "court_type": "pickleball", "scope_type": "resurfacing", "contract_amount": 10000,
+            "estimated_labor_rate": 30, "sales_tax_pct": 7,
+            "tasks": [{"task_type": "prep", "name": "Prep", "estimated_hours": 10},
+                      {"task_type": "color_coat", "name": "Color", "estimated_hours": 20}],
+            "cost_lines": [
+                {"category": "material", "description": "Resurfacer", "quantity": 10, "unit": "pail", "unit_cost": 100, "task_index": 1},
+                {"category": "equipment", "description": "Washer rental", "quantity": 2, "unit": "day", "unit_cost": 150, "task_index": 0},
+                {"category": "subcontractor", "description": "Lights", "quantity": 1, "unit": "job", "unit_cost": 2000},
+            ]}
+    r = client.post("/api/jobs", json=body, headers=auth(EST))
+    assert r.status_code == 201, r.text
+    job = r.json()
+    assert [c["description"] for c in job["cost_lines"]] == ["Resurfacer", "Washer rental", "Lights"]
+    assert job["cost_lines"][0]["task_id"] == job["tasks"][1]["id"] and job["cost_lines"][2]["task_id"] is None
+    est = client.get(f"/api/jobs/{job['id']}/costing", headers=auth(GM)).json()["estimate"]
+    # labor 30h x $30 = 900; material 1000 + 7% tax 70; equipment 300; sub 2000
+    assert est == {"labor": 900, "material": 1000, "sales_tax": 70, "equipment": 300, "subcontractor": 2000, "other": 0,
+                   "total_cost": 4270, "contract": 10000, "profit": 5730, "margin_pct": 0.573}
+
+
+def test_crew_lead_never_sees_cost_lines(client):
+    jobs = client.get("/api/jobs", headers=auth(LEAD)).json()
+    seabreeze = next(j for j in jobs if "Seabreeze" in j["name"])
+    assert "cost_lines" not in seabreeze and "sales_tax_pct" not in seabreeze
+    assert "estimate" not in client.get(f"/api/jobs/{seabreeze['id']}/costing", headers=auth(LEAD)).json()
+    gm = next(j for j in client.get("/api/jobs", headers=auth(GM)).json() if "Seabreeze" in j["name"])
+    assert len(gm["cost_lines"]) == 4
+
+
+def test_edit_cost_lines_keeps_ids_and_unlinks_removed_task(client):
+    job = job_named(client, "Seabreeze", token=GM)
+    edit = client.get(f"/api/jobs/{job['id']}/edit", headers=auth(GM)).json()
+    lines = edit["cost_lines"]
+    tasks = edit["tasks"]
+    keep = lines[0]
+    linked_task_pos = next(i for i, t in enumerate(tasks) if t["id"] == keep["task_id"])
+    body = _job_body(edit)
+    # Drop the last task (no time logged), move first line to end with a new price, delete line 2, add one
+    body["tasks"] = tasks[:-1]
+    body["cost_lines"] = [
+        {**{k: lines[2][k] for k in ("id", "category", "description", "quantity", "unit", "unit_cost")},
+         "task_index": len(tasks) - 1 if lines[2]["task_id"] == tasks[-1]["id"] else None},
+        {"category": "other", "description": "Permit", "quantity": 1, "unit": "each", "unit_cost": 85},
+        {**{k: keep[k] for k in ("id", "category", "description", "quantity", "unit")}, "unit_cost": 99, "task_index": linked_task_pos},
+    ]
+    # task_index pointing past the shortened task list is refused
+    bad = client.put(f"/api/jobs/{job['id']}", json=body, headers=auth(GM))
+    if body["cost_lines"][0]["task_index"] is not None:
+        assert bad.status_code == 422
+        body["cost_lines"][0]["task_index"] = None
+    r = client.put(f"/api/jobs/{job['id']}", json=body, headers=auth(GM))
+    assert r.status_code == 200, r.text
+    out = r.json()["cost_lines"]
+    assert [c["description"] for c in out] == [lines[2]["description"], "Permit", keep["description"]]
+    assert out[0]["id"] == lines[2]["id"] and out[2]["id"] == keep["id"] and out[2]["unit_cost"] == 99
+    assert out[2]["task_id"] == keep["task_id"]
+    # Foreign line id refused
+    other = job_named(client, "Coral Ridge", token=GM)
+    foreign = client.get(f"/api/jobs/{other['id']}/edit", headers=auth(GM)).json()["cost_lines"][0]
+    body["cost_lines"] = [{**{k: foreign[k] for k in ("id", "category", "description", "quantity", "unit", "unit_cost")}}]
+    assert client.put(f"/api/jobs/{job['id']}", json=body, headers=auth(GM)).status_code == 422
+
+
+def test_summary_includes_estimate(client):
+    summary = client.get("/api/jobs/summary", headers=auth(GM)).json()
+    coral = next(j for j in summary if "Coral Ridge" in j["job_name"])
+    e = coral["estimate"]
+    assert e["material"] > 0 and e["subcontractor"] == 18500 and e["sales_tax"] == round(e["material"] * 0.07, 2)
+    assert round(e["contract"] - e["total_cost"], 2) == e["profit"]
+
+
+def test_save_without_cost_lines_keeps_them(client):
+    job = job_named(client, "Seabreeze", token=GM)
+    edit = client.get(f"/api/jobs/{job['id']}/edit", headers=auth(GM)).json()
+    body = _job_body(edit) | {"tasks": edit["tasks"]}
+    r = client.put(f"/api/jobs/{job['id']}", json=body, headers=auth(GM))
+    assert r.status_code == 200 and len(r.json()["cost_lines"]) == len(edit["cost_lines"]) == 4
+    body["cost_lines"] = []
+    assert client.put(f"/api/jobs/{job['id']}", json=body, headers=auth(GM)).json()["cost_lines"] == []
