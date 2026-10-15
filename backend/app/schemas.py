@@ -152,11 +152,57 @@ class TimeEntryOut(ORM):
     out_lat: float | None = None
     out_lng: float | None = None
     client_updated_at: datetime
+    edited: bool = False
+    removed: bool = False
+    removed_reason: str = ""
 
     @field_serializer("clock_in", "clock_out", "client_updated_at")
     def _as_utc(self, v: datetime | None):
         # Stored naive UTC; say so explicitly so browsers don't read it as local time.
         return None if v is None else v.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+class OfficeTimeIn(BaseModel):
+    """Time added from the office, e.g. a crew lead's phone was dead."""
+
+    job_id: str
+    task_id: str
+    worker_id: str
+    clock_in: datetime
+    clock_out: datetime
+    reason: str = Field(min_length=3, max_length=500)
+
+    _utc = field_validator("clock_in", "clock_out")(to_naive_utc)
+
+
+class OfficeTimeEdit(BaseModel):
+    """A correction. Only the fields sent are changed; clock_out may be sent
+    as null to reopen an entry."""
+
+    task_id: str | None = None
+    worker_id: str | None = None
+    clock_in: datetime | None = None
+    clock_out: datetime | None = None
+    reason: str = Field(min_length=3, max_length=500)
+
+    _utc = field_validator("clock_in", "clock_out")(to_naive_utc)
+
+
+class RemoveIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
+class TimeChangeOut(BaseModel):
+    action: str
+    reason: str
+    changed_by: str
+    changed_at: datetime
+    before: dict | None
+    after: dict | None
+
+    @field_serializer("changed_at")
+    def _as_utc(self, v: datetime):
+        return v.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 # ---------- costing ----------

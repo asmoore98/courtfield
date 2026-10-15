@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import JobEditor from "./JobEditor";
+import TimeLog from "./TimeLog";
 import HoursBar, { HoursText, statusOf } from "./HoursBar";
 
 const money = (n) =>
@@ -97,7 +98,6 @@ function JobDetail({ me, jobId, onBack, onEdit }) {
   const [version, setVersion] = useState(0);
   const [statusError, setStatusError] = useState(null);
   const { data: c } = useLoad(`/api/jobs/${jobId}/costing`, [jobId, version]);
-  const { data: entries } = useLoad(`/api/time?job_id=${jobId}`, [jobId]);
   if (!c) return <p className="empty">Loading job…</p>;
 
   const sees$ = c.actual_labor_cost != null;
@@ -184,39 +184,7 @@ function JobDetail({ me, jobId, onBack, onEdit }) {
         </table>
       </section>
 
-      <section className="panel">
-        <h3>Time log</h3>
-        {!entries?.length ? (
-          <p className="empty">No time logged on this job yet.</p>
-        ) : (
-          <table className="log">
-            <thead>
-              <tr>
-                <th scope="col">Day</th>
-                <th scope="col">Crew</th>
-                <th scope="col">Task</th>
-                <th scope="col" className="num">Hours</th>
-              </tr>
-            </thead>
-            <tbody>
-              {entries.slice(0, 60).map((e) => (
-                <tr key={e.id}>
-                  <td>
-                    {new Date(e.clock_in).toLocaleDateString(undefined, { month: "short", day: "numeric" })}{" "}
-                    <span className="sub-inline">{new Date(e.clock_in).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
-                  </td>
-                  <td>{e.worker_name}</td>
-                  <td>
-                    {e.task_name}
-                    {e.off_site && <span className="flag" title="GPS stamp was more than 400 m from the job pin">Off site</span>}
-                  </td>
-                  <td className="num">{e.hours == null ? <span className="t-near">On the clock</span> : e.hours.toFixed(1)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
+      <TimeLog me={me} jobId={jobId} tasks={c.tasks} onChanged={() => setVersion((v) => v + 1)} />
     </div>
   );
 }

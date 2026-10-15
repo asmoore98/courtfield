@@ -84,7 +84,7 @@ function seed() {
       clock_in: iso(start), clock_out: null, in_lat: coral.lat, in_lng: coral.lng, out_lat: null, out_lng: null,
       note: "", client_updated_at: iso(start) });
   }
-  return { company, users, jobs, time };
+  return { company, users, jobs, time, changes: [] };
 }
 
 let db;
@@ -92,6 +92,7 @@ function load() {
   if (db) return db;
   try { db = JSON.parse(localStorage.getItem(STORE_KEY)); } catch {}
   if (!db) { db = seed(); save(); }
+  db.changes ??= [];
   return db;
 }
 function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(db)); } catch {} }
@@ -133,7 +134,7 @@ function jobOut(j, user) {
 }
 
 function costing(j, withDollars) {
-  const entries = db.time.filter((e) => e.job_id === j.id);
+  const entries = db.time.filter((e) => e.job_id === j.id && !e.voided_at);
   const closed = {}, open = {}, cost = {}, onSite = new Set();
   for (const e of entries) {
     const h = hours(e);
@@ -182,10 +183,11 @@ function validateEntry(e) {
   const now = Date.now(), cin = Date.parse(e.clock_in), cout = e.clock_out ? Date.parse(e.clock_out) : null;
   if (cin > now + 10 * 60e3) return "clock-in is in the future";
   if (cout != null && cout < cin) return "clock-out is before clock-in";
+  if (cout != null && cout > now + 10 * 60e3) return "clock-out is in the future";
   if (cout != null && cout - cin > 16 * HOUR) return "entry is longer than 16 hours";
   if (cout == null && now - cin > 16 * HOUR) return "open entry is older than 16 hours; clock it out with the real time";
   const end = cout ?? Infinity;
-  const clash = db.time.find((x) => x.worker_id === e.worker_id && x.id !== e.id && Date.parse(x.clock_in) < end &&
+  const clash = db.time.find((x) => x.worker_id === e.worker_id && x.id !== e.id && !x.voided_at && Date.parse(x.clock_in) < end &&
     (!x.clock_out || Date.parse(x.clock_out) > cin));
   if (clash) return `overlaps another entry for ${w.name}`;
   return null;
@@ -197,6 +199,23 @@ function jobFields(body) {
   const pick = ["name", "client", "address", "lat", "lng", "court_type", "scope_type", "contract_amount", "estimated_labor_rate"];
   need(typeof body.name === "string" && body.name.trim(), 422, "Job name is required");
   return Object.fromEntries(pick.map((k) => [k, body[k] ?? (["lat", "lng"].includes(k) ? null : k.endsWith("amount") || k.endsWith("rate") ? 0 : "")]));
+}
+
+const findEntry = (id) => { const e = db.time.find((x) => x.id === id); need(e, 404, "Time entry not found"); return e; };
+function snap(e) {
+  const j = db.jobs.find((x) => x.id === e.job_id);
+  return { job_id: e.job_id, task_id: e.task_id, task: j?.tasks.find((t) => t.id === e.task_id)?.name,
+    worker_id: e.worker_id, worker: db.users.find((u) => u.id === e.worker_id)?.name, clock_in: e.clock_in, clock_out: e.clock_out };
+}
+function record(user, e, action, reason, before) {
+  db.changes.push({ entry_id: e.id, action, reason: reason.trim(), changed_by: user.name, changed_at: iso(Date.now()),
+    before, after: action === "remove" ? null : snap(e) });
+}
+function listRow(e) {
+  const j = db.jobs.find((x) => x.id === e.job_id);
+  return { ...e, worker_name: db.users.find((u) => u.id === e.worker_id)?.name ?? "", task_name: j?.tasks.find((t) => t.id === e.task_id)?.name ?? "",
+    hours: e.clock_out ? r2(hours(e)) : null, off_site: j ? offSite(e, j) : false,
+    edited: db.changes.some((c) => c.entry_id === e.id && c.action !== "add"), removed: !!e.voided_at, removed_reason: e.void_reason ?? "" };
 }
 
 // ---------- routes ----------
@@ -257,6 +276,48 @@ function route(method, path, query, body, user) {
     }
   }
 
+  if (method === "POST" && path === "/api/time/office") {
+    need(user.role === "gm", 403, "Your role can't do that");
+    need((body.reason ?? "").trim().length >= 3, 422, "Give a reason for the change");
+    const e = { id: uid(), job_id: body.job_id, task_id: body.task_id, worker_id: body.worker_id, clock_in: body.clock_in, clock_out: body.clock_out,
+      in_lat: null, in_lng: null, out_lat: null, out_lng: null, note: "", client_updated_at: iso(Date.now()), entered_by_id: user.id, office_edited: true };
+    const bad = validateEntry(e);
+    need(!bad, 422, `Can't add this time: ${bad}.`);
+    db.time.push(e);
+    record(user, e, "add", body.reason, null);
+    return listRow(e);
+  }
+  if ((m = path.match(/^\/api\/time\/([^/]+)\/history$/)) && method === "GET") {
+    need(SEES_DOLLARS.includes(user.role), 403, "Your role can't do that");
+    findEntry(m[1]);
+    return db.changes.filter((c) => c.entry_id === m[1]).map(({ entry_id, ...c }) => c);
+  }
+  if ((m = path.match(/^\/api\/time\/([^/]+)\/remove$/)) && method === "POST") {
+    need(user.role === "gm", 403, "Your role can't do that");
+    need((body.reason ?? "").trim().length >= 3, 422, "Give a reason for the change");
+    const e = findEntry(m[1]);
+    need(!e.voided_at, 409, "This entry was already removed");
+    const before = snap(e);
+    Object.assign(e, { voided_at: iso(Date.now()), void_reason: body.reason.trim(), office_edited: true });
+    record(user, e, "remove", body.reason, before);
+    return listRow(e);
+  }
+  if ((m = path.match(/^\/api\/time\/([^/]+)$/)) && method === "PATCH") {
+    need(user.role === "gm", 403, "Your role can't do that");
+    need((body.reason ?? "").trim().length >= 3, 422, "Give a reason for the change");
+    const e = findEntry(m[1]);
+    need(!e.voided_at, 409, "This entry was removed. Add new time instead.");
+    const keys = ["task_id", "worker_id", "clock_in", "clock_out"].filter((k) => k in body);
+    need(keys.length, 422, "Nothing to change");
+    const cand = { ...e, ...Object.fromEntries(keys.map((k) => [k, body[k]])) };
+    const bad = validateEntry(cand);
+    need(!bad, 422, `Can't save this change: ${bad}.`);
+    const before = snap(e);
+    Object.assign(e, Object.fromEntries(keys.map((k) => [k, body[k]])), { office_edited: true, client_updated_at: iso(Date.now()) });
+    record(user, e, "edit", body.reason, before);
+    return listRow(e);
+  }
+
   if (method === "GET" && path === "/api/crew")
     return db.users.filter((u) => FIELD.includes(u.role)).map(({ id, name, role }) => ({ id, name, role })).sort((a, b) => a.name.localeCompare(b.name));
 
@@ -265,14 +326,19 @@ function route(method, path, query, body, user) {
     const results = [];
     for (const e of [...(body.entries ?? [])].sort((a, b) => Date.parse(a.client_updated_at) - Date.parse(b.client_updated_at))) {
       const ex = db.time.find((x) => x.id === e.id);
+      let inc = e;
       if (ex) {
+        if (ex.voided_at) { results.push({ id: e.id, status: "rejected", reason: "the office removed this entry" }); continue; }
         if (SAME.every((k) => norm(k, ex[k]) === norm(k, e[k]))) { results.push({ id: e.id, status: "unchanged" }); continue; }
-        if (Date.parse(ex.client_updated_at) > Date.parse(e.client_updated_at)) { results.push({ id: e.id, status: "stale", reason: "server has a newer edit" }); continue; }
+        if (ex.office_edited) {
+          if (ex.clock_out || !e.clock_out) { results.push({ id: e.id, status: "stale", reason: "the office corrected this entry" }); continue; }
+          inc = { ...e, ...Object.fromEntries(["job_id", "task_id", "worker_id", "clock_in", "in_lat", "in_lng", "note"].map((k) => [k, ex[k]])) };
+        } else if (Date.parse(ex.client_updated_at) > Date.parse(e.client_updated_at)) { results.push({ id: e.id, status: "stale", reason: "server has a newer edit" }); continue; }
       }
-      const reason = validateEntry(e);
+      const reason = validateEntry(inc);
       if (reason) { results.push({ id: e.id, status: "rejected", reason }); continue; }
-      if (ex) Object.assign(ex, e);
-      else db.time.push({ ...e, entered_by_id: user.id });
+      if (ex) Object.assign(ex, inc);
+      else db.time.push({ ...inc, entered_by_id: user.id });
       results.push({ id: e.id, status: "saved" });
     }
     return { results };
@@ -282,12 +348,15 @@ function route(method, path, query, body, user) {
     let rows = [...db.time];
     if (query.get("job_id")) rows = rows.filter((e) => e.job_id === query.get("job_id"));
     if (query.get("open_only") === "true") rows = rows.filter((e) => !e.clock_out);
+    if (query.get("include_removed") !== "true" || query.get("open_only") === "true") rows = rows.filter((e) => !e.voided_at);
+    const edited = new Set(db.changes.filter((c) => c.action !== "add").map((c) => c.entry_id));
     rows.sort((a, b) => Date.parse(b.clock_in) - Date.parse(a.clock_in));
     return rows.slice(0, 1000).map((e) => {
       const j = db.jobs.find((x) => x.id === e.job_id);
       return { ...e, worker_name: db.users.find((u) => u.id === e.worker_id)?.name ?? "",
         task_name: j?.tasks.find((t) => t.id === e.task_id)?.name ?? "",
-        hours: e.clock_out ? r2(hours(e)) : null, off_site: j ? offSite(e, j) : false };
+        hours: e.clock_out ? r2(hours(e)) : null, off_site: j ? offSite(e, j) : false,
+        edited: edited.has(e.id), removed: !!e.voided_at, removed_reason: e.void_reason ?? "" };
     });
   }
   throw new HttpError(404, "Not found");

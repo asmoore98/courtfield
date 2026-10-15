@@ -230,3 +230,81 @@ def test_estimator_cannot_create_active_job(client):
     body = {"name": "X", "court_type": "tennis", "scope_type": "repair", "status": "active", "tasks": []}
     assert client.post("/api/jobs", json=body, headers=auth(EST)).json()["status"] == "scheduled"
     assert client.post("/api/jobs", json=body, headers=auth(GM)).json()["status"] == "active"
+
+
+# ---------- office corrections ----------
+
+def _open_coral_entry(client):
+    rows = client.get("/api/time?open_only=true", headers=auth(GM)).json()
+    return next(r for r in rows if r["worker_name"] == "Luis Vega")
+
+
+def test_gm_adds_time_for_dead_phone_day(client):
+    job = job_named(client, "Seabreeze")
+    w = worker_named(client, "Andre Wells")
+    t0 = now() - timedelta(days=1, hours=6)
+    body = {"job_id": job["id"], "task_id": job["tasks"][0]["id"], "worker_id": w["id"],
+            "clock_in": iso(t0), "clock_out": iso(t0 + timedelta(hours=4)), "reason": "Crew lead's phone was dead"}
+    assert client.post("/api/time/office", json=body, headers=auth(LEAD)).status_code == 403
+    assert client.post("/api/time/office", json=body, headers=auth(EST)).status_code == 403
+    r = client.post("/api/time/office", json=body, headers=auth(GM))
+    assert r.status_code == 201, r.text
+    cost = client.get(f"/api/jobs/{job['id']}/costing", headers=auth(GM)).json()
+    assert cost["tasks"][0]["actual_hours"] == 4.0
+    hist = client.get(f"/api/time/{r.json()['id']}/history", headers=auth(OWNER)).json()
+    assert [h["action"] for h in hist] == ["add"] and hist[0]["changed_by"] == "Sam Ortiz"
+    # Missing reason is refused
+    assert client.post("/api/time/office", json={**body, "reason": ""}, headers=auth(GM)).status_code == 422
+
+
+def test_gm_fixes_entry_and_phone_cannot_undo_it(client):
+    e = _open_coral_entry(client)
+    fixed_in = now() - timedelta(hours=1)
+    r = client.patch(f"/api/time/{e['id']}", json={"clock_in": iso(fixed_in), "reason": "Arrived at 1pm, not noon"}, headers=auth(GM))
+    assert r.status_code == 200, r.text
+    assert r.json()["edited"] is True and r.json()["clock_out"] is None
+
+    # The crew lead's phone still has the old clock-in and now clocks out.
+    phone = {"id": e["id"], "job_id": e["job_id"], "task_id": e["task_id"], "worker_id": e["worker_id"],
+             "clock_in": e["clock_in"], "clock_out": iso(now()), "client_updated_at": iso(now())}
+    statuses, _ = sync(client, phone, token="dev-lead-1")
+    assert statuses == ["saved"]
+    row = next(x for x in client.get("/api/time", headers=auth(GM)).json() if x["id"] == e["id"])
+    assert row["clock_in"].startswith(fixed_in.strftime("%Y-%m-%dT%H:%M")) and row["clock_out"] is not None
+    # Once closed by the office's terms, further phone edits are stale.
+    statuses, _ = sync(client, {**phone, "clock_out": iso(now() - timedelta(minutes=5)), "client_updated_at": iso(now())}, token="dev-lead-1")
+    assert statuses == ["stale"]
+
+    hist = client.get(f"/api/time/{e['id']}/history", headers=auth(GM)).json()
+    assert hist[0]["action"] == "edit" and hist[0]["before"]["clock_in"] != hist[0]["after"]["clock_in"]
+
+
+def test_gm_removes_entry_keeps_record(client):
+    e = _open_coral_entry(client)
+    job_id = e["job_id"]
+    before = client.get(f"/api/jobs/{job_id}/costing", headers=auth(GM)).json()["crew_on_site"]
+    r = client.post(f"/api/time/{e['id']}/remove", json={"reason": "Clocked in by mistake"}, headers=auth(GM))
+    assert r.status_code == 200 and r.json()["removed"] is True
+    after = client.get(f"/api/jobs/{job_id}/costing", headers=auth(GM)).json()["crew_on_site"]
+    assert after == before - 1
+    ids = [x["id"] for x in client.get(f"/api/time?job_id={job_id}", headers=auth(GM)).json()]
+    assert e["id"] not in ids
+    removed = [x for x in client.get(f"/api/time?job_id={job_id}&include_removed=true", headers=auth(GM)).json() if x["id"] == e["id"]]
+    assert removed and removed[0]["removed_reason"] == "Clocked in by mistake"
+    # Phone resending it is told the office removed it
+    phone = {k: e[k] for k in ("id", "job_id", "task_id", "worker_id", "clock_in")} | {"clock_out": iso(now()), "client_updated_at": iso(now())}
+    statuses, results = sync(client, phone, token="dev-lead-1")
+    assert statuses == ["rejected"] and "removed" in results[0]["reason"]
+    # Worker can be clocked in again (removed entry no longer blocks overlap)
+    statuses, _ = sync(client, {**phone, "id": str(uuid.uuid4()), "clock_out": None}, token="dev-lead-1")
+    assert statuses == ["saved"]
+
+
+def test_correction_rules(client):
+    e = _open_coral_entry(client)
+    bad = client.patch(f"/api/time/{e['id']}", json={"clock_out": iso(now() - timedelta(hours=5)), "reason": "typo test"}, headers=auth(GM))
+    assert bad.status_code == 422 and "before clock-in" in bad.json()["detail"]
+    assert client.patch(f"/api/time/{e['id']}", json={"reason": "nothing"}, headers=auth(GM)).status_code == 422
+    assert client.patch(f"/api/time/{e['id']}", json={"clock_out": iso(now()), "reason": "x"}, headers=auth(GM)).status_code == 422
+    other_gm = client.patch(f"/api/time/{e['id']}", json={"clock_out": iso(now()), "reason": "Done for day"}, headers=auth(OTHER))
+    assert other_gm.status_code == 404

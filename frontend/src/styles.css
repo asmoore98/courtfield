@@ -128,7 +128,7 @@ h3 { font-size: 1.25rem; margin-bottom: 12px; }
 
 .topbar {
   display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
-  padding: 12px 16px;
+  padding: max(12px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 12px max(16px, env(safe-area-inset-left));
   background: var(--panel);
   border-bottom: 1px solid var(--rule);
 }
@@ -339,3 +339,49 @@ tbody th { font-weight: 600; }
   display: flex; flex-wrap: wrap; gap: 4px 16px; justify-content: center; align-items: baseline;
   padding: 8px 16px; background: var(--court-tint); color: var(--asphalt); font-size: 0.95rem; text-align: center;
 }
+
+/* ---------- time corrections ---------- */
+
+.log-tools { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: flex-end; }
+.log-tools .btn-ghost { min-height: 44px; }
+.check { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.95rem; }
+.check input { width: 20px; height: 20px; accent-color: var(--court); }
+.table-scroll { overflow-x: auto; }
+.row-actions { white-space: nowrap; text-align: right; }
+.row-actions .link + .link { margin-left: 14px; }
+.row-open > td { background: var(--court-tint); border-top: 0; padding: 0; }
+.is-removed td { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--muted); }
+.is-removed .flag, .is-removed .row-actions { text-decoration: none; }
+.flag-edited { color: var(--court); border-color: var(--court); }
+.flag-removed { color: var(--over); border-color: var(--over); }
+
+.timeform { display: grid; gap: 12px; padding: 16px; background: var(--court-tint); border-radius: 8px; margin-bottom: 12px; }
+.row-open .timeform { border-radius: 0; margin: 0; }
+.timeform h4 { margin: 0; font-family: var(--font-num); font-size: 1.15rem; font-weight: 600; }
+.timeform label { display: grid; gap: 4px; font-weight: 600; font-size: 0.95rem; }
+.timeform input, .timeform select {
+  min-height: 46px; padding: 0 10px; width: 100%; min-width: 0;
+  border: 1px solid var(--rule); border-radius: 8px; background: var(--panel); font-weight: 400; font-size: 1rem;
+}
+.timeform .help { margin: 0; }
+.tf-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.tf-reason { grid-column: 1 / -1; }
+.tf-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+.btn-danger { min-height: var(--tap); padding: 0 20px; border-radius: 8px; font-weight: 600; background: var(--over); color: #fff; border: 0; }
+
+.history { margin: 0; padding: 14px 16px 14px 34px; display: grid; gap: 10px; }
+.history li { line-height: 1.4; }
+.h-reason { display: block; font-style: italic; }
+.h-line { display: block; color: var(--muted); font-size: 0.92rem; }
+
+/* ---------- install hint ---------- */
+
+.install {
+  display: grid; grid-template-columns: 40px 1fr; gap: 10px 12px; align-items: start;
+  padding: 12px; margin-bottom: 12px; border: 1px solid var(--court); border-radius: 10px; background: var(--panel);
+}
+.install img { border-radius: 9px; }
+.install-text { display: grid; gap: 2px; }
+.install-text span { color: var(--muted); font-size: 0.95rem; }
+.install-actions { grid-column: 1 / -1; display: flex; gap: 16px; align-items: center; justify-content: flex-end; }
+.install-actions .btn { min-height: 44px; }

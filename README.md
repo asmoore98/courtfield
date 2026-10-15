@@ -12,6 +12,8 @@ This is **Phase 1: labor hours versus the estimate.** Materials (Phase 2), estim
 - **Works without signal:** every tap is saved on the phone first and synced when there's a connection. Resending is safe: the server ignores duplicates, and the newest edit wins.
 - **GPS stamp** on clock-in and clock-out. Entries more than 400 m from the job pin are flagged "Off site" in the time log.
 - **Job and estimate entry (GM, estimator):** create or edit a job with its court type, scope, contract amount, the labor rate used in the estimate, and the job's location (or "Use my current location" from a phone on site). Tasks get estimated hours and can be added, renamed, reordered and removed, starting from a task list that matches the court type and scope. A task with crew time logged on it can't be removed. Live totals show estimated crew hours, labor dollars, and labor as a share of the contract.
+- **Time corrections (GM):** add time from the office (a dead phone, a forgotten clock-in), fix an entry's crew member, task or times, or remove it. Every change needs a reason and is kept in the entry's history with who made it and what it was before. Removed time is kept, not deleted, and stops counting toward hours and cost. Once the office corrects an entry, the field app can still clock it out but can't undo the correction.
+- **Installs like an app:** on Android, an Install button; on iPhone, Add to Home Screen. Once installed it opens full-screen and loads with no signal, using the jobs and crew saved from the last sync.
 - **Job status (GM):** start, complete or reopen a job. Crew leads only see jobs that aren't complete.
 - **Office view (GM, owner, estimator):** every job's hours against the estimate, labor dollars against the labor budget, and a per-task breakdown with the time log.
 - **Roles:** crew leads see hours only, never dollars. The owner is read-only. Only the GM and estimators create jobs.
@@ -67,6 +69,7 @@ frontend/src/
 ## Before real use
 
 - **Replace dev auth.** Sign-in currently uses static access codes. It needs real accounts with hashed passwords or an identity provider, plus short-lived sessions.
-- **Move to Postgres** by setting `DATABASE_URL`, and add migrations (Alembic).
+- **Move to Postgres** by setting `DATABASE_URL`, and add migrations (Alembic). Until then, schema changes mean re-running `python -m app.seed` on a dev database.
+- **HTTPS hosting.** Installing to the home screen and the offline service worker only work over HTTPS (or on localhost).
 - **Payroll export** and an accounting export (QuickBooks or whatever the pilot uses).
 - **Address lookup.** Job location is entered as coordinates or taken from the device; turning an address into a map pin needs a geocoding service.

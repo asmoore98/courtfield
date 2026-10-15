@@ -161,6 +161,32 @@ class TimeEntry(Base):
     # Last-write-wins timestamp set by the device that made the change.
     client_updated_at: Mapped[datetime] = mapped_column(DateTime)
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Set once anyone in the office has added or corrected this entry. From
+    # then on the field app can only close it, not change what the office set.
+    office_edited: Mapped[bool] = mapped_column(default=False)
+    # Removed entries are kept (voided), never deleted, so payroll history holds.
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    voided_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    void_reason: Mapped[str] = mapped_column(Text, default="")
 
     worker: Mapped[User] = relationship(foreign_keys=[worker_id])
     task: Mapped[JobTask] = relationship()
+
+
+class TimeEntryChange(Base):
+    """Audit trail: one row per office add, correction or removal of a time
+    entry, with the entry as it was before and after."""
+
+    __tablename__ = "time_entry_changes"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    entry_id: Mapped[str] = mapped_column(ForeignKey("time_entries.id"), index=True)
+    changed_by_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    changed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    action: Mapped[str] = mapped_column(String(10))  # "add" | "edit" | "remove"
+    reason: Mapped[str] = mapped_column(Text)
+    before: Mapped[str] = mapped_column(Text, default="")  # JSON snapshot
+    after: Mapped[str] = mapped_column(Text, default="")
+
+    changed_by: Mapped[User] = relationship()

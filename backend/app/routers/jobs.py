@@ -36,7 +36,7 @@ def _entries(db: Session, job: Job) -> list[TimeEntry]:
     return list(
         db.scalars(
             select(TimeEntry)
-            .where(TimeEntry.job_id == job.id, TimeEntry.company_id == job.company_id)
+            .where(TimeEntry.job_id == job.id, TimeEntry.company_id == job.company_id, TimeEntry.voided_at.is_(None))
             .options(selectinload(TimeEntry.worker))
         )
     )

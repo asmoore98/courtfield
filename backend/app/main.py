@@ -1,3 +1,4 @@
+import mimetypes
 from pathlib import Path
 
 from fastapi import Depends, FastAPI
@@ -40,6 +41,8 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
         edits_jobs=user.role in EDITS_JOBS,
     )
 
+
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 # Serve the built front end (frontend/dist) from the same origin when present.
 _dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, safeGet, safeSet } from "./api";
 import { useFieldTime } from "./fieldStore";
 import HoursBar, { HoursText } from "./HoursBar";
+import InstallHint from "./InstallHint";
 
 const JOBS_KEY = "cf.jobs";
 const CREW_KEY = "cf.crew";
@@ -119,6 +120,7 @@ export default function FieldView() {
 
   return (
     <div className="field">
+      <InstallHint />
       <div className="field-top">
         <label className="job-pick">
           <span className="sr-only">Job</span>
