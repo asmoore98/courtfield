@@ -63,6 +63,26 @@ export async function api(path, { method = "GET", body } = {}) {
   return res.json();
 }
 
+// Save a file from the API (e.g. a CSV) to the device.
+export async function download(path, filename) {
+  let res;
+  try {
+    res = await fetch(path, { headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {} });
+  } catch {
+    throw new ApiError(0, "No connection. Downloads need signal.");
+  }
+  if (!res.ok) {
+    checkSignedOut(res.status, path);
+    throw new ApiError(res.status, "Couldn't create the file. Try again.");
+  }
+  const url = URL.createObjectURL(await res.blob());
+  const a = Object.assign(document.createElement("a"), { href: url, download: filename });
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
 export function safeGet(key, fallback = null) {
   try {
     const v = localStorage.getItem(key);

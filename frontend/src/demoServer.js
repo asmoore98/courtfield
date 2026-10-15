@@ -421,6 +421,71 @@ function publicRoute(method, path, body) {
   return undefined;
 }
 
+// ---------- timesheet (mirror backend/app/reports.py; uses this browser's time zone) ----------
+
+const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const parseYmd = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
+function demoTimesheet(weekParam) {
+  const ws = db.company.week_start ?? 0;
+  const any = weekParam ? parseYmd(weekParam) : new Date();
+  any.setHours(0, 0, 0, 0);
+  const mondayIdx = (any.getDay() + 6) % 7;
+  const start = new Date(any); start.setDate(any.getDate() - ((mondayIdx - ws + 7) % 7));
+  const end = new Date(start); end.setDate(start.getDate() + 7);
+  const days = [...Array(7)].map((_, i) => { const d = new Date(start); d.setDate(start.getDate() + i); return d; });
+  const edited = new Set(db.changes.map((c) => c.entry_id));
+  const people = {};
+  for (const e of db.time) {
+    const cin = new Date(e.clock_in);
+    if (e.voided_at || cin < start || cin >= end) continue;
+    const w = db.users.find((u) => u.id === e.worker_id);
+    const j = db.jobs.find((x) => x.id === e.job_id);
+    const p = (people[w.id] ??= { worker_id: w.id, name: w.name, role: w.role, cost: w.hourly_cost ?? 0, days: [0, 0, 0, 0, 0, 0, 0], jobs: {},
+      flags: { open_entries: 0, corrected: 0, off_site: 0, long_days: 0 } });
+    if (!e.clock_out) { p.flags.open_entries++; continue; }
+    const h = hours(e);
+    const di = Math.round((new Date(cin.getFullYear(), cin.getMonth(), cin.getDate()) - start) / 864e5);
+    p.days[di] += h;
+    p.jobs[j.name] = (p.jobs[j.name] ?? 0) + h;
+    if (edited.has(e.id)) p.flags.corrected++;
+    if (offSite(e, j)) p.flags.off_site++;
+  }
+  const rows = Object.values(people).sort((a, b) => a.name.localeCompare(b.name)).map((p) => {
+    const total = p.days.reduce((a, b) => a + b, 0);
+    const hourly = FIELD.includes(p.role);
+    const regular = hourly ? Math.min(total, 40) : total;
+    const ot = hourly ? Math.max(0, total - 40) : 0;
+    p.flags.long_days = p.days.filter((h) => h > 12).length;
+    return { worker_id: p.worker_id, name: p.name, role: p.role, days: p.days.map(r2), total_hours: r2(total), regular_hours: r2(regular),
+      overtime_hours: r2(ot), overtime_tracked: hourly, labor_cost: r2((regular + ot * 1.5) * p.cost),
+      jobs: Object.entries(p.jobs).sort((a, b) => b[1] - a[1]).map(([job, h]) => ({ job, hours: r2(h) })), flags: p.flags };
+  });
+  const sum = (k) => r2(rows.reduce((s2, r) => s2 + r[k], 0));
+  const last = new Date(end); last.setDate(end.getDate() - 1);
+  return { week_start: ymd(start), week_end: ymd(last), timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    days: days.map((d) => ({ date: ymd(d), label: DAY_LABELS[(d.getDay() + 6) % 7] })), people: rows,
+    totals: { days: [...Array(7)].map((_, i) => r2(rows.reduce((s2, r) => s2 + r.days[i], 0))), total_hours: sum("total_hours"),
+      regular_hours: sum("regular_hours"), overtime_hours: sum("overtime_hours"), labor_cost: sum("labor_cost") } };
+}
+
+function reportRoute(method, path, query, body, user) {
+  if (path === "/api/reports/timesheet" && method === "GET") {
+    need(["gm", "owner"].includes(user.role), 403, "Your role can't do that");
+    return demoTimesheet(query.get("week"));
+  }
+  if (path === "/api/company") {
+    need(["gm", "owner"].includes(user.role), 403, "Your role can't do that");
+    db.company.week_start ??= 0;
+    if (method === "PATCH") {
+      need(user.role === "gm", 403, "Your role can't do that");
+      if (body.week_start != null) db.company.week_start = Number(body.week_start);
+    }
+    return { name: db.company.name, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, week_start: db.company.week_start };
+  }
+  return undefined;
+}
+
 function teamRoute(method, path, body, user, token) {
   let m;
   if (method === "POST" && path === "/api/auth/logout") { delete db.sessions[token]; return null; }
@@ -471,6 +536,8 @@ export async function demoFetch(path, { method = "GET", body, token }) {
     if (!user) throw new HttpError(401, "Your sign-in has ended. Sign in again.");
     const team = teamRoute(method, url.pathname, b ?? {}, user, token);
     if (team !== undefined) { save(); return { ok: true, status: 200, data: team }; }
+    const rep = reportRoute(method, url.pathname, url.searchParams, b ?? {}, user);
+    if (rep !== undefined) { save(); return { ok: true, status: 200, data: rep }; }
     const data = route(method, url.pathname, url.searchParams, b, user);
     if (method !== "GET") save();
     return { ok: true, status: 200, data: JSON.parse(JSON.stringify(data)) };

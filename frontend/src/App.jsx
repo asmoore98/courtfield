@@ -3,6 +3,7 @@ import { DEMO, api, clearToken, getToken, onSignedOut, safeGet, safeSet, setToke
 import FieldView from "./FieldView";
 import OfficeView from "./OfficeView";
 import TeamView from "./TeamView";
+import TimesheetView from "./TimesheetView";
 
 const ME_KEY = "cf.me";
 // Sample sign-ins: shown in the preview and in local development only.
@@ -206,7 +207,13 @@ export default function App() {
   const canField = me.enters_time;
   const canOffice = me.sees_dollars;
   const canTeam = me.role === "gm";
-  const views = [canField && ["field", "Field"], canOffice && ["office", "Office"], canTeam && ["team", "Team"]].filter(Boolean);
+  const canPayroll = me.role === "gm" || me.role === "owner";
+  const views = [
+    canField && ["field", "Field"],
+    canOffice && ["office", "Jobs"],
+    canPayroll && ["timesheets", "Timesheets"],
+    canTeam && ["team", "Team"],
+  ].filter(Boolean);
   const view = mode ?? (canOffice ? "office" : "field");
 
   return (
@@ -233,6 +240,8 @@ export default function App() {
       <main className="content">
         {!canField && !canOffice ? (
           <p className="empty">Your role doesn't have a screen yet. Materials and warehouse tools arrive in Phase 2.</p>
+        ) : view === "timesheets" && canPayroll ? (
+          <TimesheetView me={me} />
         ) : view === "team" && canTeam ? (
           <TeamView me={me} />
         ) : view === "field" && canField ? (

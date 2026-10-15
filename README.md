@@ -16,6 +16,7 @@ This is **Phase 1: labor hours versus the estimate.** Materials (Phase 2), estim
 - **Installs like an app:** on Android, an Install button; on iPhone, Add to Home Screen. Once installed it opens full-screen and loads with no signal, using the jobs and crew saved from the last sync.
 - **Job status (GM):** start, complete or reopen a job. Crew leads only see jobs that aren't complete.
 - **Office view (GM, owner, estimator):** every job's hours against the estimate, labor dollars against the labor budget, and a per-task breakdown with the time log.
+- **Timesheets (GM, owner):** each person's hours by day for a pay week, with regular and overtime (over 40 hours) split out for crew and crew leads, labor cost with overtime at 1.5×, and flags for anything to check before payroll: still on the clock, days over 12 hours, office corrections, off-site stamps. **Download for payroll** saves a CSV with every entry and a per-person summary that opens in Excel or Google Sheets. The pay week's start day is a company setting; days use the company's time zone.
 - **Sign-in:** email and password, with passwords stored as salted scrypt hashes. Each phone or computer gets its own sign-in that lasts 90 days, and the GM can end it at any time. New people and password resets use one-time links that expire in 7 days. Repeated wrong passwords are slowed down.
 - **Team (GM):** add people with their role and labor cost per hour, send sign-in links, sign a lost phone out, or turn someone off. Plain crew members don't need an email; their crew lead clocks them in.
 - **Roles:** crew leads see hours only, never dollars. The owner is read-only. Only the GM and estimators create jobs.
@@ -84,6 +85,6 @@ alembic upgrade head
 
 ## Still to do
 
-- **Payroll export** and an accounting export (QuickBooks or whatever the pilot uses).
+- **Direct payroll and accounting connections** (QuickBooks or whatever the pilot uses). The CSV covers payroll until then.
 - **Address lookup.** Job location is entered as coordinates or taken from the device; turning an address into a map pin needs a geocoding service.
 - **Email delivery of sign-in links.** Links are copied and texted by the GM for now.

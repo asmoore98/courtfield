@@ -4,6 +4,7 @@ sqlalchemy>=2.0
 pydantic>=2.7
 alembic>=1.13
 psycopg[binary]>=3.2
+tzdata>=2024.1        # time zones even where the OS has none
 # dev / test
 pytest>=8
 httpx>=0.27

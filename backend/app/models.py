@@ -82,6 +82,10 @@ class Company(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(String(200))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # Local time zone for days and pay weeks (IANA name).
+    timezone: Mapped[str] = mapped_column(String(64), default="America/New_York", server_default="America/New_York")
+    # First day of the pay week: 0 = Monday ... 6 = Sunday.
+    week_start: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
 
 class User(Base):

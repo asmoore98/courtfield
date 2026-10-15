@@ -426,3 +426,24 @@ tbody th { font-weight: 600; }
   .person { grid-template-columns: minmax(0, 1fr) auto; }
   .signin-status { grid-column: 1 / -1; justify-self: start; }
 }
+
+/* ---------- timesheets ---------- */
+
+.ts-meta { display: flex; flex-wrap: wrap; gap: 6px 24px; align-items: center; color: var(--muted); margin: 8px 0 4px; }
+.inline-select { display: inline-flex; gap: 8px; align-items: center; }
+.inline-select select {
+  min-height: 40px; padding: 0 8px; border: 1px solid var(--rule); border-radius: 8px; background: var(--panel); color: var(--asphalt);
+}
+.ts-table { font-variant-numeric: tabular-nums; min-width: 820px; }
+.ts-table th[scope="row"] { min-width: 180px; }
+.ts-table thead .num .sub { font-size: 0.8rem; }
+.ts-table td.num { font-family: var(--font-num); font-size: 1.05rem; }
+.ts-sum { background: var(--court-tint); }
+.ts-table tfoot th, .ts-table tfoot td { border-top: 2px solid var(--court); font-weight: 600; }
+.ts-flags { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.ts-flags .flag { margin-left: 0; font-weight: 500; }
+.flag-warn { color: var(--near); border-color: var(--near); }
+.flag-info { color: var(--court); border-color: var(--court); }
+.ts-export { display: grid; gap: 8px; justify-items: start; margin-top: 16px; }
+.ts-export .help { max-width: 70ch; margin: 0; }
+.ts-table th[scope="row"] .sub { font-weight: 400; }
