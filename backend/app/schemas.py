@@ -30,11 +30,13 @@ class MeOut(UserOut):
     company_name: str
     sees_dollars: bool
     enters_time: bool
+    edits_jobs: bool
 
 
 # ---------- jobs ----------
 
 class TaskIn(BaseModel):
+    id: str | None = None  # set when editing an existing task; omit for a new one
     task_type: TaskType
     name: str = Field(min_length=1, max_length=200)
     estimated_hours: float = Field(ge=0)
@@ -60,11 +62,22 @@ class JobIn(BaseModel):
     status: JobStatus = JobStatus.scheduled
     contract_amount: float = Field(default=0, ge=0)
     estimated_labor_rate: float = Field(default=0, ge=0)
-    tasks: list[TaskIn] = []
+    tasks: list[TaskIn] = Field(default=[], max_length=100)
+
+
+class JobUpdate(JobIn):
+    """Full replacement of a job's details and task list. Status changes go
+    through PATCH /status (GM only), so status here is ignored."""
+
+    status: JobStatus | None = None
 
 
 class JobStatusIn(BaseModel):
     status: JobStatus
+
+
+class TaskOutWithTime(TaskOut):
+    has_time: bool = False  # time is logged against it, so it can't be removed
 
 
 class JobOut(ORM):
@@ -81,6 +94,10 @@ class JobOut(ORM):
     # Only filled in for roles that see dollars; omitted otherwise.
     contract_amount: float | None = None
     estimated_labor_rate: float | None = None
+
+
+class JobEditOut(JobOut):
+    tasks: list[TaskOutWithTime]
 
 
 # ---------- time ----------

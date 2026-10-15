@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
+import JobEditor from "./JobEditor";
 import HoursBar, { HoursText, statusOf } from "./HoursBar";
 
 const money = (n) =>
@@ -27,15 +28,30 @@ function useLoad(path, deps = []) {
   return state;
 }
 
-function JobList({ onOpen }) {
+function JobList({ me, onOpen, onNew }) {
   const { data, error } = useLoad("/api/jobs/summary");
+  const newButton = me.edits_jobs && (
+    <div className="list-head">
+      <button className="btn" onClick={onNew}>
+        New job
+      </button>
+    </div>
+  );
   if (error && !data) return <p className="empty">Couldn't load jobs: {error}</p>;
   if (!data) return <p className="empty">Loading jobs…</p>;
-  if (!data.length) return <p className="empty">No jobs yet. Jobs you add show their hours against the estimate here.</p>;
+  if (!data.length)
+    return (
+      <>
+        {newButton}
+        <p className="empty">No jobs yet. Jobs you add show their hours against the estimate here.</p>
+      </>
+    );
 
   const order = { active: 0, scheduled: 1, complete: 2 };
   const jobs = [...data].sort((a, b) => order[a.status] - order[b.status]);
   return (
+    <>
+    {newButton}
     <ul className="joblist">
       {jobs.map((j) => {
         const tone = statusOf(j.hours_used_pct);
@@ -67,21 +83,54 @@ function JobList({ onOpen }) {
         );
       })}
     </ul>
+    </>
   );
 }
 
-function JobDetail({ jobId, onBack }) {
-  const { data: c } = useLoad(`/api/jobs/${jobId}/costing`, [jobId]);
+const NEXT_STATUS = {
+  scheduled: ["active", "Start job"],
+  active: ["complete", "Mark complete"],
+  complete: ["active", "Reopen job"],
+};
+
+function JobDetail({ me, jobId, onBack, onEdit }) {
+  const [version, setVersion] = useState(0);
+  const [statusError, setStatusError] = useState(null);
+  const { data: c } = useLoad(`/api/jobs/${jobId}/costing`, [jobId, version]);
   const { data: entries } = useLoad(`/api/time?job_id=${jobId}`, [jobId]);
   if (!c) return <p className="empty">Loading job…</p>;
 
   const sees$ = c.actual_labor_cost != null;
+  async function setStatus(status) {
+    setStatusError(null);
+    try {
+      await api(`/api/jobs/${jobId}/status`, { method: "PATCH", body: { status } });
+      setVersion((v) => v + 1);
+    } catch (e) {
+      setStatusError(e.message);
+    }
+  }
   return (
     <div className="detail">
       <button className="link back" onClick={onBack}>
         All jobs
       </button>
-      <h2 className="detail-title">{c.job_name}</h2>
+      <div className="detail-head">
+        <h2 className="detail-title">{c.job_name}</h2>
+        <div className="detail-actions">
+          {me.edits_jobs && (
+            <button className="btn-ghost" onClick={onEdit}>
+              Edit job
+            </button>
+          )}
+          {me.role === "gm" && (
+            <button className="btn-ghost" onClick={() => setStatus(NEXT_STATUS[c.status][0])}>
+              {NEXT_STATUS[c.status][1]}
+            </button>
+          )}
+        </div>
+      </div>
+      {statusError && <p className="alert" role="alert">{statusError}</p>}
       <div className="detail-figures">
         <div>
           <span className="fig">{Math.round(c.actual_hours + c.open_hours)}</span>
@@ -172,7 +221,19 @@ function JobDetail({ jobId, onBack }) {
   );
 }
 
-export default function OfficeView() {
-  const [open, setOpen] = useState(null);
-  return open ? <JobDetail jobId={open} onBack={() => setOpen(null)} /> : <JobList onOpen={setOpen} />;
+export default function OfficeView({ me }) {
+  // screen: { view: "list" } | { view: "job", id } | { view: "edit", id? }
+  const [screen, setScreen] = useState({ view: "list" });
+  const toList = () => setScreen({ view: "list" });
+  if (screen.view === "edit")
+    return (
+      <JobEditor
+        jobId={screen.id}
+        onDone={(id) => setScreen({ view: "job", id })}
+        onCancel={() => (screen.id ? setScreen({ view: "job", id: screen.id }) : toList())}
+      />
+    );
+  if (screen.view === "job")
+    return <JobDetail me={me} jobId={screen.id} onBack={toList} onEdit={() => setScreen({ view: "edit", id: screen.id })} />;
+  return <JobList me={me} onOpen={(id) => setScreen({ view: "job", id })} onNew={() => setScreen({ view: "edit" })} />;
 }

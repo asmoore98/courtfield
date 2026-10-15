@@ -11,6 +11,8 @@ This is **Phase 1: labor hours versus the estimate.** Materials (Phase 2), estim
 - **Crew lead on a phone:** pick the job, check off crew members, and tap a task to clock them in. Tapping a different task switches them over, closing the first task at the same moment. A clock-out bar appears when anyone selected is on the clock.
 - **Works without signal:** every tap is saved on the phone first and synced when there's a connection. Resending is safe: the server ignores duplicates, and the newest edit wins.
 - **GPS stamp** on clock-in and clock-out. Entries more than 400 m from the job pin are flagged "Off site" in the time log.
+- **Job and estimate entry (GM, estimator):** create or edit a job with its court type, scope, contract amount, the labor rate used in the estimate, and the job's location (or "Use my current location" from a phone on site). Tasks get estimated hours and can be added, renamed, reordered and removed, starting from a task list that matches the court type and scope. A task with crew time logged on it can't be removed. Live totals show estimated crew hours, labor dollars, and labor as a share of the contract.
+- **Job status (GM):** start, complete or reopen a job. Crew leads only see jobs that aren't complete.
 - **Office view (GM, owner, estimator):** every job's hours against the estimate, labor dollars against the labor budget, and a per-task breakdown with the time log.
 - **Roles:** crew leads see hours only, never dollars. The owner is read-only. Only the GM and estimators create jobs.
 - **Multi-tenant from day one:** every row carries a company id, and every query is scoped to the signed-in user's company.
@@ -63,4 +65,4 @@ frontend/src/
 - **Replace dev auth.** Sign-in currently uses static access codes. It needs real accounts with hashed passwords or an identity provider, plus short-lived sessions.
 - **Move to Postgres** by setting `DATABASE_URL`, and add migrations (Alembic).
 - **Payroll export** and an accounting export (QuickBooks or whatever the pilot uses).
-- **A real job and estimate editor in the UI.** Jobs can be created through the API today.
+- **Address lookup.** Job location is entered as coordinates or taken from the device; turning an address into a map pin needs a geocoding service.

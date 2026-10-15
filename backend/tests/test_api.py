@@ -178,3 +178,55 @@ def test_summary_flags_overrun_on_completed_job(client):
     assert palm["labor_variance"] is not None
     active = next(j for j in summary if j["status"] == "active")
     assert active["labor_variance"] is None and active["crew_on_site"] == 3
+
+
+# ---------- editing jobs ----------
+
+def test_edit_job_add_rename_reorder_remove(client):
+    job = job_named(client, "Seabreeze")
+    edit = client.get(f"/api/jobs/{job['id']}/edit", headers=auth(EST)).json()
+    t = edit["tasks"]
+    body = {k: edit[k] for k in ("name", "client", "address", "lat", "lng", "court_type", "scope_type", "contract_amount", "estimated_labor_rate")}
+    body["contract_amount"] = 12500
+    body["tasks"] = [
+        {**t[1], "estimated_hours": 9},                                     # moved to first, hours changed
+        {**t[0], "name": "Pressure wash, blow off & prep"},                 # renamed
+        {"task_type": "nets_posts", "name": "New nets", "estimated_hours": 2},  # added
+        *t[2:4],                                                            # t[4] (Lines) removed
+    ]
+    r = client.put(f"/api/jobs/{job['id']}", json=body, headers=auth(EST))
+    assert r.status_code == 200, r.text
+    out = r.json()
+    assert [x["name"] for x in out["tasks"]] == [t[1]["name"], "Pressure wash, blow off & prep", "New nets", t[2]["name"], t[3]["name"]]
+    assert out["tasks"][0]["estimated_hours"] == 9 and out["contract_amount"] == 12500
+    assert out["status"] == "scheduled"
+
+
+def test_cannot_remove_task_with_logged_time(client):
+    job = job_named(client, "Coral Ridge")  # first task has crew hours
+    edit = client.get(f"/api/jobs/{job['id']}/edit", headers=auth(GM)).json()
+    assert edit["tasks"][0]["has_time"] is True and edit["tasks"][-1]["has_time"] is False
+    body = {k: edit[k] for k in ("name", "client", "address", "lat", "lng", "court_type", "scope_type", "contract_amount", "estimated_labor_rate")}
+    body["tasks"] = edit["tasks"][1:]
+    r = client.put(f"/api/jobs/{job['id']}", json=body, headers=auth(GM))
+    assert r.status_code == 409 and "Base check" in r.json()["detail"]
+    # Nothing changed
+    assert len(client.get(f"/api/jobs/{job['id']}/edit", headers=auth(GM)).json()["tasks"]) == len(edit["tasks"])
+
+
+def test_edit_rejects_foreign_task_and_wrong_roles(client):
+    a, b = job_named(client, "Seabreeze"), job_named(client, "Coral Ridge")
+    edit = client.get(f"/api/jobs/{a['id']}/edit", headers=auth(GM)).json()
+    body = {k: edit[k] for k in ("name", "client", "address", "lat", "lng", "court_type", "scope_type", "contract_amount", "estimated_labor_rate")}
+    body["tasks"] = [*edit["tasks"], {**b["tasks"][0]}]
+    assert client.put(f"/api/jobs/{a['id']}", json=body, headers=auth(GM)).status_code == 422
+    body["tasks"] = edit["tasks"]
+    for token in (LEAD, OWNER):
+        assert client.put(f"/api/jobs/{a['id']}", json=body, headers=auth(token)).status_code == 403
+    assert client.put(f"/api/jobs/{a['id']}", json=body, headers=auth(OTHER)).status_code == 404
+
+
+def test_estimator_cannot_create_active_job(client):
+    body = {"name": "X", "court_type": "tennis", "scope_type": "repair", "status": "active", "tasks": []}
+    assert client.post("/api/jobs", json=body, headers=auth(EST)).json()["status"] == "scheduled"
+    assert client.post("/api/jobs", json=body, headers=auth(GM)).json()["status"] == "active"

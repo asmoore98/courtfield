@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
-from .auth import ENTERS_TIME, SEES_DOLLARS, current_user
+from .auth import EDITS_JOBS, ENTERS_TIME, SEES_DOLLARS, current_user
 from .db import Base, engine, get_db
 from .models import Company, User
 from .routers import jobs, time
@@ -37,6 +37,7 @@ def me(user: User = Depends(current_user), db: Session = Depends(get_db)):
         id=user.id, name=user.name, role=user.role,
         company_id=company.id, company_name=company.name,
         sees_dollars=user.role in SEES_DOLLARS, enters_time=user.role in ENTERS_TIME,
+        edits_jobs=user.role in EDITS_JOBS,
     )
 
 

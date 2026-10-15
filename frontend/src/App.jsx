@@ -113,7 +113,7 @@ export default function App() {
         ) : view === "field" && canField ? (
           <FieldView />
         ) : (
-          <OfficeView />
+          <OfficeView me={me} />
         )}
       </main>
     </div>
