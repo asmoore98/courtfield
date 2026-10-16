@@ -130,7 +130,7 @@ def sync_time(body: SyncIn, user: User = Depends(require_roles(*ENTERS_TIME)), d
 def _out(e: TimeEntry, job: Job, edited: bool) -> TimeEntryOut:
     return TimeEntryOut(
         id=e.id, job_id=e.job_id, task_id=e.task_id, worker_id=e.worker_id,
-        worker_name=e.worker.name, task_name=e.task.name,
+        worker_name=e.worker.name, task_name=e.task.name, entered_by_id=e.entered_by_id,
         clock_in=e.clock_in, clock_out=e.clock_out,
         hours=round(entry_hours(e), 2) if e.clock_out else None,
         off_site=is_off_site(e, job), note=e.note,

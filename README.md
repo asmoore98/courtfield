@@ -17,6 +17,9 @@ This is **Phase 1: labor hours versus the estimate.** Materials (Phase 2), estim
 - **Job material lists:** the material quantities on a job's estimate become its material list for the warehouse and the crew lead. For each item it shows planned, sent, brought back, used (sent minus back), and status, plus anything sent that wasn't on the estimate. GM, owner and estimator also see estimated and actual material cost; the job page shows materials used against the estimate.
 - **Warehouse (warehouse role, GM):** log what goes out to a job (with lot numbers for warranty), what comes back, deliveries received, and shelf counts. Stock on hand updates with every entry. Returns can't exceed what's out on the job. Mistakes are voided with a reason, never deleted, and every entry keeps who logged it and when. The warehouse and crew leads never see prices.
 - **Crew lead:** the field screen has a read-only material list for the job, available offline once loaded.
+- **Crew locations (GM, owner):** while anyone a crew lead clocked in is on the clock, the lead's phone sends its location every few minutes while the app is open, plus at every clock-in and clock-out. Nothing is recorded off the clock: the server drops any ping outside clocked time that person entered. The crew lead sees a one-time notice first (the acknowledgment is kept) and a reminder on the field screen while sharing. If a job has no site pin, the crew lead can set it from the job site.
+  - **Live map:** each crew on the clock, where its lead's phone is, whether that's on site and how far from the job, and how long since the phone checked in.
+  - **Daily report:** per person per day: first in, last out, clocked hours split into on the job, travel, and can't tell, plus unclocked gaps between entries, with a timeline, a route map, and a CSV. Travel is clocked time with the phone away from the job site (400 m around the pin). A web app only gets GPS while open, so a locked-phone gap counts as on the job when the phone was on site at both ends; the longest gap is shown for each person.
 - **Time corrections (GM):** add time from the office (a dead phone, a forgotten clock-in), fix an entry's crew member, task or times, or remove it. Every change needs a reason and is kept in the entry's history with who made it and what it was before. Removed time is kept, not deleted, and stops counting toward hours and cost. Once the office corrects an entry, the field app can still clock it out but can't undo the correction.
 - **Installs like an app:** on Android, an Install button; on iPhone, Add to Home Screen. Once installed it opens full-screen and loads with no signal, using the jobs and crew saved from the last sync.
 - **Job status (GM):** start, complete or reopen a job. Crew leads only see jobs that aren't complete.
@@ -52,7 +55,7 @@ See [DEPLOY.md](DEPLOY.md). It covers a Render Blueprint (`render.yaml`) and a `
 
 ### Clickable preview without a server
 
-`npm run build:demo` in `frontend/` builds `dist-demo/index.html`, a single file with a stand-in server and the sample data inside it. The preview doesn't include the price list or material tracking. It's for showing the app to someone: changes save only in that browser, and "Reset sample data" starts over.
+`npm run build:demo` in `frontend/` builds `dist-demo/index.html`, a single file with a stand-in server and the sample data inside it. The preview doesn't include the price list, material tracking, or crew locations. It's for showing the app to someone: changes save only in that browser, and "Reset sample data" starts over.
 
 ## Tests
 

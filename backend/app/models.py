@@ -117,6 +117,9 @@ class User(Base):
     password_hash: Mapped[str | None] = mapped_column(String(200), nullable=True)
     active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # When this person acknowledged that their phone shares its location with
+    # the office while their crew is on the clock. Kept as a record of notice.
+    location_notice_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class DeviceSession(Base):
@@ -317,3 +320,25 @@ class TimeEntryChange(Base):
     after: Mapped[str] = mapped_column(Text, default="")
 
     changed_by: Mapped[User] = relationship()
+
+
+class LocationPing(Base):
+    """Where a crew lead's phone was at one moment while their crew was on the
+    clock. Only accepted inside a clocked window of time that phone's user
+    entered, so nobody is tracked off the clock.
+
+    The id is generated on the phone so a resend after a dropped connection
+    doesn't make a duplicate.
+    """
+
+    __tablename__ = "location_pings"
+    __table_args__ = (Index("ix_ping_user_time", "user_id", "recorded_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime)
+    lat: Mapped[float] = mapped_column(Float)
+    lng: Mapped[float] = mapped_column(Float)
+    accuracy_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

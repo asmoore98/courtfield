@@ -37,6 +37,8 @@ MANAGES_STOCK = {Role.gm, Role.warehouse}
 EDITS_PRICES = {Role.gm, Role.estimator}
 # Who sees a job's material list (dollars only for SEES_DOLLARS).
 SEES_MATERIALS = {Role.owner, Role.gm, Role.estimator, Role.crew_lead, Role.warehouse}
+# Who sees where crews are (live map, daily travel report).
+SEES_LOCATIONS = {Role.owner, Role.gm}
 # Who manages people, rates and sign-ins.
 MANAGES_TEAM = {Role.gm}
 # Roles that sign in. Plain crew members are clocked in by their crew lead.

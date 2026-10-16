@@ -38,7 +38,7 @@ const toWire = (e) => ({
   note: e.note ?? "", client_updated_at: e.client_updated_at,
 });
 
-export function useFieldTime() {
+export function useFieldTime(meId) {
   // Source of truth lives in refs so a sync always reads the newest changes,
   // even ones made a moment ago; state only drives re-rendering.
   const entriesRef = useRef(safeGet(ENTRIES_KEY, {}));
@@ -143,14 +143,14 @@ export function useFieldTime() {
         if (cur && cur.task_id === taskId && cur.job_id === jobId) continue;
         if (cur) changed.push({ ...cur, clock_out: at, out_lat: pos?.lat, out_lng: pos?.lng, client_updated_at: at });
         changed.push({
-          id: uuid(), job_id: jobId, task_id: taskId, worker_id: wid, clock_in: at,
+          id: uuid(), job_id: jobId, task_id: taskId, worker_id: wid, entered_by_id: meId, clock_in: at,
           in_lat: pos?.lat, in_lng: pos?.lng, client_updated_at: at,
         });
       }
       write(changed);
       setTimeout(sync, 0);
     },
-    [openFor, write, sync]
+    [openFor, write, sync, meId]
   );
 
   const clockOut = useCallback(
@@ -170,5 +170,7 @@ export function useFieldTime() {
   const dismissProblem = (id) => setProblems((p) => p.filter((x) => x.id !== id));
 
   const pendingCount = Object.keys(pendingRef.current).length;
-  return { openFor, startTask, clockOut, sync, online, lastSync, pendingCount, problems, dismissProblem };
+  // Someone this phone clocked in is on the clock (drives location sharing).
+  const myCrewOnClock = Object.values(entries).some((e) => !e.clock_out && e.entered_by_id === meId);
+  return { myCrewOnClock, openFor, startTask, clockOut, sync, online, lastSync, pendingCount, problems, dismissProblem };
 }

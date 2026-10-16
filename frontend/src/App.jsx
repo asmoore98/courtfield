@@ -5,6 +5,7 @@ import OfficeView from "./OfficeView";
 import TeamView from "./TeamView";
 import TimesheetView from "./TimesheetView";
 import MaterialsView from "./MaterialsView";
+import CrewsView from "./CrewsView";
 
 const ME_KEY = "cf.me";
 // Sample sign-ins: shown in the preview and in local development only.
@@ -209,10 +210,12 @@ export default function App() {
   const canOffice = me.sees_dollars;
   const canTeam = me.role === "gm";
   const canPayroll = me.role === "gm" || me.role === "owner";
+  const canCrews = !DEMO && !!me.sees_locations;
   const canMaterials = !DEMO && ["gm", "estimator", "owner", "warehouse"].includes(me.role);
   const views = [
     canField && ["field", "Field"],
     canOffice && ["office", "Jobs"],
+    canCrews && ["crews", "Crews"],
     canMaterials && ["materials", "Materials"],
     canPayroll && ["timesheets", "Timesheets"],
     canTeam && ["team", "Team"],
@@ -243,6 +246,8 @@ export default function App() {
       <main className="content">
         {!canField && !canOffice && !canMaterials ? (
           <p className="empty">Your role doesn't have a screen yet.</p>
+        ) : view === "crews" && canCrews ? (
+          <CrewsView />
         ) : view === "materials" && canMaterials ? (
           <MaterialsView me={me} />
         ) : view === "timesheets" && canPayroll ? (

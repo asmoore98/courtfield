@@ -33,6 +33,12 @@ class MeOut(UserOut):
     edits_jobs: bool
     manages_stock: bool = False
     edits_prices: bool = False
+    sees_locations: bool = False
+    location_notice_at: datetime | None = None
+
+    @field_serializer("location_notice_at")
+    def _notice_utc(self, v: datetime | None):
+        return None if v is None else v.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 # ---------- jobs ----------
@@ -174,6 +180,7 @@ class TimeEntryOut(ORM):
     worker_id: str
     worker_name: str
     task_name: str
+    entered_by_id: str | None = None
     clock_in: datetime
     clock_out: datetime | None
     hours: float | None

@@ -15,7 +15,7 @@ from . import config
 from .auth import hash_password
 from .db import Base, SessionLocal, engine
 from .models import (
-    Company, CostCategory, CostLine, CourtType, Job, MoveKind, StockItem, StockMove, JobStatus, JobTask, Role, ScopeType, TaskType, TimeEntry, User, utcnow,
+    Company, CostCategory, CostLine, CourtType, Job, LocationPing, MoveKind, StockItem, StockMove, JobStatus, JobTask, Role, ScopeType, TaskType, TimeEntry, User, utcnow,
 )
 
 # Dev tokens. Sign in on the front end by pasting one of these.
@@ -191,12 +191,25 @@ def seed() -> None:
             # Done: first task (over), second (partly). Crew on site right now.
             done = [(job.tasks[0], job.tasks[0].estimated_hours * 1.35), (job.tasks[1], job.tasks[1].estimated_hours * 0.6)]
             db.add_all(_workday_entries(rng, job, done, team, today - timedelta(days=4), lead))
+            # Today: clocked in at the yard, drove ~30 min, on site since. The
+            # lead's phone was locked for a stretch mid-morning (no pings).
             now = utcnow()
+            cin = now - timedelta(hours=2, minutes=15)
+            yard = (lat + 0.038, lng - 0.016)
             for w in team:
                 db.add(TimeEntry(
                     id=str(uuid.uuid4()), company_id=co.id, job_id=job.id, task_id=job.tasks[1].id,
-                    worker_id=w.id, entered_by_id=lead.id, clock_in=now - timedelta(hours=2, minutes=15),
-                    in_lat=lat, in_lng=lng, client_updated_at=now - timedelta(hours=2, minutes=15),
+                    worker_id=w.id, entered_by_id=lead.id, clock_in=cin,
+                    in_lat=yard[0], in_lng=yard[1], client_updated_at=cin,
+                ))
+            for m in range(5, 135, 5):
+                if 50 < m < 95:
+                    continue  # phone locked
+                f = min(1.0, m / 30)
+                db.add(LocationPing(
+                    id=str(uuid.uuid4()), company_id=co.id, user_id=lead.id, recorded_at=cin + timedelta(minutes=m),
+                    lat=yard[0] + (lat - yard[0]) * f + rng.uniform(-0.0002, 0.0002),
+                    lng=yard[1] + (lng - yard[1]) * f + rng.uniform(-0.0002, 0.0002), accuracy_m=rng.choice([8, 12, 20, 35]),
                 ))
     # Coral Ridge (active): material already out to the job, some brought back
     coral = db.scalar(select(Job).where(Job.company_id == co.id, Job.name.like("Coral Ridge%")))

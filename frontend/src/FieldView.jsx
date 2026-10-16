@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DEMO, api, safeGet, safeSet } from "./api";
-import { useFieldTime } from "./fieldStore";
+import { getPosition, useFieldTime } from "./fieldStore";
 import HoursBar, { HoursText } from "./HoursBar";
 import InstallHint from "./InstallHint";
 import JobMaterials from "./JobMaterials";
+import { useLocationSharing } from "./locationShare";
 
 const JOBS_KEY = "cf.jobs";
 const CREW_KEY = "cf.crew";
@@ -19,7 +20,53 @@ function useCached(key, path) {
     } catch {}
   }, [key, path]);
   useEffect(() => void load(), [load]);
-  return data;
+  return [data, load];
+}
+
+const NOTICE_KEY = "cf.locNotice";
+
+// One-time notice, kept on the server as a record that the crew lead was told.
+function LocationNotice({ me, onDone }) {
+  const [busy, setBusy] = useState(false);
+  async function ok() {
+    setBusy(true);
+    safeSet(NOTICE_KEY, true);
+    try {
+      await api("/api/me/location-notice", { method: "POST" });
+    } catch {} // offline: sent again next time the app opens
+    onDone();
+  }
+  return (
+    <section className="panel loc-notice" aria-labelledby="loc-notice-h">
+      <h2 id="loc-notice-h">Location while your crew is on the clock</h2>
+      <p>
+        While anyone you clocked in is on the clock, this app sends this phone's location to the office every few minutes
+        while it's open. The office uses it to see which job each crew is at and to split the day into time on the job
+        and travel. It stops as soon as everyone you clocked in is clocked out.
+      </p>
+      <p className="help">Your phone will ask to allow location for this app. Choose Allow.</p>
+      <button className="btn" onClick={ok} disabled={busy}>Got it</button>
+    </section>
+  );
+}
+
+function LocationStatus({ share, active }) {
+  if (share.permission === "denied" || share.permission === "unsupported") {
+    return (
+      <p className="alert loc-alert" role="alert">
+        Location is off for this app, so the office can't see where the crew is or how much was travel. Turn on Location
+        for this site in your phone's settings, then reopen the app.
+      </p>
+    );
+  }
+  if (!active) return null;
+  return (
+    <p className="loc-status">
+      <span className="loc-dot" aria-hidden="true" />
+      Sharing location with the office while your crew is on the clock
+      {share.lastAt && <span className="sub-inline"> · updated {share.lastAt.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>}
+    </p>
+  );
 }
 
 function useTick(ms) {
@@ -55,14 +102,34 @@ function SyncStatus({ online, pendingCount, lastSync, onSync }) {
 
 export default function FieldView({ me }) {
   const [showMats, setShowMats] = useState(false);
-  const jobs = useCached(JOBS_KEY, "/api/jobs");
-  const crew = useCached(CREW_KEY, "/api/crew");
+  const [jobs, reloadJobs] = useCached(JOBS_KEY, "/api/jobs");
+  const [crew] = useCached(CREW_KEY, "/api/crew");
   const [jobId, setJobId] = useState(() => safeGet(JOB_KEY));
   const [selected, setSelected] = useState(new Set());
   const [costing, setCosting] = useState(null);
   const [working, setWorking] = useState(false);
-  const field = useFieldTime();
+  const field = useFieldTime(me?.id);
   useTick(30000);
+  const [noticed, setNoticed] = useState(() => DEMO || !!me?.location_notice_at || !!safeGet(NOTICE_KEY));
+  useEffect(() => {
+    // Told while offline: make sure the server has the record.
+    if (!DEMO && me && !me.location_notice_at && safeGet(NOTICE_KEY)) api("/api/me/location-notice", { method: "POST" }).catch(() => {});
+  }, [me]);
+  const share = useLocationSharing({ enabled: !DEMO && noticed, active: field.myCrewOnClock, canFlush: field.pendingCount === 0 });
+  const [pinMsg, setPinMsg] = useState(null);
+  useEffect(() => setPinMsg(null), [jobId]);
+  async function pinHere() {
+    setPinMsg("Finding this phone's location…");
+    const pos = await getPosition(15000);
+    if (!pos) return setPinMsg("Couldn't get a location. Check that Location is on for this app and try again.");
+    try {
+      await api(`/api/jobs/${jobId}/site`, { method: "POST", body: pos });
+      await reloadJobs();
+      setPinMsg("Site pin set. Time here now counts as on the job.");
+    } catch (e) {
+      setPinMsg(e.status === 0 ? "No signal. Try again once you have a connection." : e.message);
+    }
+  }
 
   const job = jobs.find((j) => j.id === jobId) ?? null;
   useEffect(() => {
@@ -136,6 +203,17 @@ export default function FieldView({ me }) {
         </label>
         <SyncStatus {...field} onSync={field.sync} />
       </div>
+
+      {!noticed && <LocationNotice me={me} onDone={() => setNoticed(true)} />}
+      {noticed && !DEMO && <LocationStatus share={share} active={field.myCrewOnClock} />}
+      {!DEMO && job && job.lat == null && (
+        <div className="pin-ask">
+          <span>This job has no site pin, so on-the-job and travel time can't be worked out.</span>
+          <button className="btn-ghost" onClick={pinHere}>Set the site pin here</button>
+          {pinMsg && <span className="sub">{pinMsg}</span>}
+        </div>
+      )}
+      {!DEMO && job && job.lat != null && pinMsg && <p className="help pin-done" role="status">{pinMsg}</p>}
 
       {field.problems.map((p) => (
         <div className="alert" role="alert" key={p.id}>
