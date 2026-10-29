@@ -18,7 +18,8 @@ def me_out(db: Session, user: User) -> MeOut:
     return MeOut(
         id=user.id, name=user.name, role=user.role, company_id=company.id, company_name=company.name,
         sees_dollars=user.role in auth.SEES_DOLLARS, enters_time=user.role in auth.ENTERS_TIME,
-        edits_jobs=user.role in auth.EDITS_JOBS,
+        edits_jobs=user.role in auth.EDITS_JOBS, creates_jobs=user.role in auth.CREATES_JOBS,
+        estimates=user.role in auth.ESTIMATES, sales_side=user.role in auth.SALES_SIDE,
         manages_stock=user.role in auth.MANAGES_STOCK, edits_prices=user.role in auth.EDITS_PRICES,
         sees_locations=user.role in auth.SEES_LOCATIONS, location_notice_at=user.location_notice_at,
     )

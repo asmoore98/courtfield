@@ -45,21 +45,45 @@ def get_timesheet_csv(week: str | None = None, user: User = Depends(payroll_role
                     headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+PROPOSAL_FIELDS = ("proposal_name", "proposal_address", "proposal_phone", "proposal_email", "proposal_license",
+                   "proposal_logo_url", "proposal_terms")
+
+
 class CompanyOut(BaseModel):
     name: str
     timezone: str
     week_start: int
+    proposal_name: str = ""
+    proposal_address: str = ""
+    proposal_phone: str = ""
+    proposal_email: str = ""
+    proposal_license: str = ""
+    proposal_logo_url: str = ""
+    proposal_terms: str = ""
+    estimate_valid_days: int = 30
 
 
 class CompanyEdit(BaseModel):
     timezone: str | None = None
     week_start: int | None = Field(default=None, ge=0, le=6)
+    proposal_name: str | None = Field(default=None, max_length=200)
+    proposal_address: str | None = Field(default=None, max_length=300)
+    proposal_phone: str | None = Field(default=None, max_length=40)
+    proposal_email: str | None = Field(default=None, max_length=254)
+    proposal_license: str | None = Field(default=None, max_length=100)
+    proposal_logo_url: str | None = Field(default=None, max_length=500)
+    proposal_terms: str | None = Field(default=None, max_length=10000)
+    estimate_valid_days: int | None = Field(default=None, ge=1, le=365)
+
+
+def _company_out(c) -> CompanyOut:
+    return CompanyOut(name=c.name, timezone=c.timezone, week_start=c.week_start, estimate_valid_days=c.estimate_valid_days,
+                      **{k: getattr(c, k) for k in PROPOSAL_FIELDS})
 
 
 @router.get("/company", response_model=CompanyOut)
 def get_company(user: User = Depends(require_roles(Role.gm, Role.owner)), db: Session = Depends(get_db)):
-    c = _company(db, user)
-    return CompanyOut(name=c.name, timezone=c.timezone, week_start=c.week_start)
+    return _company_out(_company(db, user))
 
 
 @router.patch("/company", response_model=CompanyOut)
@@ -71,5 +95,11 @@ def edit_company(body: CompanyEdit, user: User = Depends(require_roles(Role.gm))
         c.timezone = body.timezone
     if body.week_start is not None:
         c.week_start = body.week_start
+    if body.estimate_valid_days is not None:
+        c.estimate_valid_days = body.estimate_valid_days
+    for k in PROPOSAL_FIELDS:
+        v = getattr(body, k)
+        if v is not None:
+            setattr(c, k, v.strip())
     db.commit()
-    return CompanyOut(name=c.name, timezone=c.timezone, week_start=c.week_start)
+    return _company_out(c)

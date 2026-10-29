@@ -6,13 +6,15 @@ import { api } from "./api";
 const ROLES = [
   ["crew", "Crew member", "Clocked in by their crew lead. Doesn't sign in."],
   ["crew_lead", "Crew lead", "Clocks the crew in and out on a phone."],
-  ["estimator", "Estimator", "Builds jobs and estimates."],
+  ["estimator", "Estimator", "Builds estimates and sees their costs."],
+  ["pm", "Project manager", "Same as an estimator for now: estimates, jobs and their costs."],
+  ["sales", "Sales", "Brings in leads and clients. Sees their own estimates' status and price, never costs or margins."],
   ["gm", "General manager", "Everything, including people and time corrections."],
   ["owner", "Owner", "Sees jobs, hours and dollars. Read-only."],
-  ["warehouse", "Warehouse", "Materials tools arrive in Phase 2."],
+  ["warehouse", "Warehouse", "Logs material in and out. Never sees prices."],
 ];
 const ROLE_LABEL = Object.fromEntries(ROLES.map(([v, l]) => [v, l]));
-const SIGNS_IN = new Set(["crew_lead", "estimator", "gm", "owner", "warehouse"]);
+const SIGNS_IN = new Set(["crew_lead", "estimator", "pm", "sales", "gm", "owner", "warehouse"]);
 
 function signInStatus(p) {
   if (!p.active) return ["Turned off", "off"];

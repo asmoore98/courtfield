@@ -6,6 +6,51 @@ To undo a whole batch after it's merged: open its pull request on GitHub and cli
 
 ---
 
+## v0.4.0 — Batch 2: Leads, estimates, clients, proposals
+
+**Date:** October 29, 2026 · **Branch:** `drew/batch2-estimates-clients` · **By:** Drew Moore
+
+The flow is now **Lead → Estimate → Job**. Sales brings in a lead, an estimator prices it, the estimate goes out as a proposal, and a won estimate becomes a job with one tap. The GM can still start a job with no estimate (callbacks, small patches).
+
+### What changed
+
+| Change | Why | Where |
+|---|---|---|
+| **Clients** tab: name, contact, phone, email, billing address, notes, plans & documents links. Each client shows its leads, estimates and jobs. Clients are never deleted; the GM can turn one off | One place per customer, tied to everything done for them | `ClientsView.jsx`, `routers/clients.py` |
+| **Leads** tab: client (pick a returning one or "+ New client"), project, site address, parcel, court type/scope if known, description, Google Drive links, bid due date, salesperson. A lead's "Details" section holds the description. Statuses New → Being estimated → Estimate sent, or Dropped (with a reason). "Start the estimate" opens an estimate filled in from the lead | Sales hands the estimator everything in one place | `LeadsView.jsx`, `routers/leads.py` |
+| **Estimates** tab: numbered E-2026-001…; statuses Draft, Sent, Won, Lost, No bid, Expired; filter by status | Estimates are separate from jobs, so lost bids don't clutter the job list and are kept to learn from | `EstimatesView.jsx`, `routers/estimates.py` |
+| **Locked versions:** every save makes the next version (v1, v2…). Old versions can't be changed; pick any version from the dropdown to see it. Only the GM can remove a version, with a reason, and it stays on record as removed | A trail of every change | same |
+| **History** on every client, lead and estimate: who did what, when, and why | People can be sneaky; this keeps a trail | `app/activity.py`, `Activity` table |
+| **Follow-ups:** "Needs follow-up" list at the top of Estimates when a sent estimate has gone 15 days without a logged follow-up. Expired automatically after 30 days (adjustable per estimate and in Settings). "Log a follow-up" records who you talked to | Don't let bids go cold | `routers/estimates.py` |
+| Lost and No bid require a reason | Learn what we're high on or missing | same |
+| **Printable proposal:** company header, client, project, scope of work, work included, not included, price, terms, signature lines. "Print / Save as PDF". Never shows costs, markups, margins or internal notes, whoever opens it | Something to send the client | `ProposalView.jsx` |
+| **Create job from a won estimate:** site, tasks, hours and cost lines carry over; the job is linked to the client | No retyping | `routers/estimates.py`, `routers/jobs.py` |
+| **Jobs tab shows "Won, ready to become jobs"** at the top: every won estimate without a job yet, each with a Create job button | Marking an estimate won didn't put anything on the Jobs tab | `OfficeView.jsx` |
+| **Settings** tab (GM): proposal header (name, address, phone, email, license, logo link), standard terms, default days an estimate is good for | Placeholder until the real letterhead is known | `SettingsView.jsx`, `routers/reports.py` |
+| **New roles: Sales and PM.** Sales: leads, clients, their own estimates' status and price, proposals, follow-ups; never costs or margins, never other salespeople's leads/estimates. PM: same as estimator for now | Sales enters leads; roles get tightened later | `models.py`, `auth.py`, `TeamView.jsx` |
+| Only the GM can start a job without an estimate ("New job without an estimate" on Jobs). Estimators and PMs make jobs from won estimates | Jobs come from estimates | `routers/jobs.py`, `OfficeView.jsx` |
+| Job and estimate forms share one form (tasks, cost lines, location, drafts, highlighting from Batch 1) | Fixes in one place apply to both | `JobEditor.jsx` (`ScopeEditor`) |
+| Tests: 9 new for clients, leads, estimates, versions, follow-ups, expiry, proposals, sales never seeing costs | Keep it working | `tests/test_estimates.py`; existing tests updated for GM-only direct jobs |
+
+### Database change
+
+Migration `30a23cf6e287`: new tables `clients`, `leads`, `estimates`, `estimate_versions`, `activity`; proposal settings on `companies`; `jobs.client_id`; roles `sales` and `pm`. Existing jobs are untouched (they just have no client record linked). Tested up, down and up on Postgres, including a database with existing jobs. Render applies it on deploy.
+
+### Placeholders and known limits
+
+- **Plans & documents** are links (Google Drive, Dropbox) pasted one per line, not uploads. Real uploads, and insurance certs, come in a later batch.
+- **Follow-up reminders** show inside the app only. Email or text alerts need a sending service.
+- **Proposal header** fields are placeholders until we know what goes there.
+- **Markups and charge rates** come in Batch 3; for now the proposal price is typed in.
+- **Sales and PM permissions** are first passes; we'll tighten them when all the roles are sorted out.
+
+### How to undo
+
+- **Everything:** revert this batch's pull request on GitHub. The new tables stay in the database, unused. To remove them too, run `alembic downgrade 92a2e076f67e` from the Render Shell (this deletes all clients, leads and estimates).
+- **Just GM-only direct jobs:** in `backend/app/auth.py`, set `CREATES_JOBS = {Role.gm, Role.estimator, Role.pm}`.
+
+---
+
 ## v0.3.0 — Batch 1: New job screen fixes
 
 **Date:** October 29, 2026 · **Branch:** `drew/batch1-quick-fixes` · **By:** Drew Moore

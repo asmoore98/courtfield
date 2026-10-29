@@ -61,7 +61,7 @@ const TURF_STARTER = [
   ["fence", "Fence & netting"],
 ];
 
-const starterTasks = (court, scope) =>
+export const starterTasks = (court, scope) =>
   (court === "turf_field" ? TURF_STARTER : STARTERS[scope]).map(([task_type, name]) => ({
     key: crypto.randomUUID?.() ?? String(Math.random()),
     task_type,
@@ -69,7 +69,7 @@ const starterTasks = (court, scope) =>
     estimated_hours: "",
   }));
 
-const blankJob = () => ({
+export const blankJob = () => ({
   name: "",
   client: "",
   address: "",
@@ -108,18 +108,17 @@ export function estimateOf(job) {
   return { hours, labor, ...cat, sales_tax, total_cost, contract, profit, margin_pct: contract > 0 ? profit / contract : null };
 }
 
-const num = (v) => (v === "" || v == null ? 0 : Number(v));
-const money = (n) => n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
-const money2 = (n) => n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+export const num = (v) => (v === "" || v == null ? 0 : Number(v));
+export const money = (n) => n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
+export const money2 = (n) => n.toLocaleString("en-US", { style: "currency", currency: "USD" });
 const CATEGORY_LABEL = Object.fromEntries(COST_CATEGORIES.map(([v, l]) => [v, l]));
 
 // Unsaved work is kept on this device until it's saved or thrown away, so
 // tapping another tab (or the phone killing the app) doesn't lose it.
-const draftKey = (jobId) => `cf.draft.job.${jobId ?? "new"}`;
-const savedAtText = (t) => new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+export const savedAtText = (t) => new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
 // Cost breakdown and expected profit. Shared by the editor and the job page.
-export function EstimateTable({ est, taxPct }) {
+export function EstimateTable({ est, taxPct, priceLabel = "Contract" }) {
   const rows = [
     ["Labor", est.labor, `${Math.round(est.hours * 10) / 10} crew hours`],
     ["Materials", est.material],
@@ -145,7 +144,7 @@ export function EstimateTable({ est, taxPct }) {
           <td />
         </tr>
         <tr>
-          <th scope="row">Contract</th>
+          <th scope="row">{priceLabel}</th>
           <td className="num">{est.contract ? money(est.contract) : "Not set"}</td>
           <td />
         </tr>
@@ -162,12 +161,97 @@ export function EstimateTable({ est, taxPct }) {
   );
 }
 
-export default function JobEditor({ jobId, onDone, onCancel }) {
-  const key = draftKey(jobId);
-  const [draft] = useState(() => safeGet(key));
-  const [job, setJob] = useState(() => (jobId ? null : draft?.job ?? blankJob()));
-  const [touchedTasks, setTouchedTasks] = useState(() => (jobId ? true : !!draft?.touchedTasks));
-  const [restoredAt, setRestoredAt] = useState(() => (!jobId && draft ? draft.savedAt : null));
+
+// Turn a saved job or estimate version into form state.
+export function formFrom(j) {
+  return {
+    ...j,
+    parcel_id: j.parcel_id ?? "",
+    address: j.address ?? "",
+    contract_amount: j.contract_amount ?? "",
+    estimated_labor_rate: j.estimated_labor_rate ?? "",
+    sales_tax_pct: j.sales_tax_pct || "",
+    tasks: j.tasks.map((t) => ({ ...t, key: t.id ?? newKey(), estimated_hours: t.estimated_hours ?? "" })),
+    cost_lines: (j.cost_lines ?? []).map((c, i) => ({
+      ...c,
+      key: c.id ?? newKey(),
+      // Saved jobs link a line to a task by id; estimate versions by position.
+      task_key: c.task_id ?? (c.task_index != null ? null : ""),
+      _task_index: c.task_index,
+    })),
+  };
+}
+
+// Estimate versions point lines at tasks by position; give them the task keys.
+function linkTaskKeys(f) {
+  if (!f.cost_lines.some((c) => c.task_key === null)) return f;
+  return { ...f, cost_lines: f.cost_lines.map((c) => (c.task_key === null ? { ...c, task_key: f.tasks[c._task_index]?.key ?? "" } : c)) };
+}
+
+// The body shared by jobs and estimates: site, kind of work, money, tasks, cost lines.
+export function scopeBody(f) {
+  return {
+    name: f.name.trim(),
+    address: f.address.trim(),
+    parcel_id: (f.parcel_id ?? "").trim(),
+    lat: f.lat === "" ? null : f.lat,
+    lng: f.lng === "" ? null : f.lng,
+    court_type: f.court_type,
+    scope_type: f.scope_type,
+    contract_amount: num(f.contract_amount),
+    estimated_labor_rate: num(f.estimated_labor_rate),
+    sales_tax_pct: num(f.sales_tax_pct),
+    cost_lines: f.cost_lines.map((c) => {
+      const ti = c.task_key ? f.tasks.findIndex((t) => t.key === c.task_key) : -1;
+      return {
+        ...(c.id ? { id: c.id } : {}),
+        category: c.category,
+        description: c.description.trim(),
+        quantity: num(c.quantity),
+        unit: (c.unit ?? "").trim(),
+        unit_cost: num(c.unit_cost),
+        task_index: ti >= 0 ? ti : null,
+        item_id: c.item_id || null,
+      };
+    }),
+    tasks: f.tasks.map((t) => ({
+      ...(t.id ? { id: t.id } : {}),
+      task_type: t.task_type,
+      name: t.name.trim(),
+      estimated_hours: num(t.estimated_hours),
+    })),
+  };
+}
+
+/* The form for a job or an estimate: who and where, kind of work, tasks and
+   hours, materials and other costs, and the cost summary. Wrappers (JobEditor,
+   EstimateEditor) supply how it loads and saves and any fields of their own.
+
+   Unsaved work is kept on this device (draftKey) until it's saved or thrown
+   away, so tapping another tab or the phone closing the app doesn't lose it. */
+export function ScopeEditor({
+  draftKey,
+  load, // async () => form state; omit for a brand-new form
+  blank = blankJob,
+  title,
+  backLabel,
+  submitLabel,
+  labels = {},
+  clientField, // (form, set) => element in place of the plain client box
+  extraTop, // (form, set) => element under the main fields
+  extraPanels, // (form, set) => panels before the cost summary
+  footer, // (form, set) => element above the save button
+  validate, // (form) => message or null, checked before saving
+  submit, // async (form, body) => result
+  onDone,
+  onCancel,
+}) {
+  const isNew = !load;
+  const L = { name: "Job name", namePlaceholder: "Client – court count and work", price: "Contract amount", priceRow: "Contract", ...labels };
+  const [draft] = useState(() => safeGet(draftKey));
+  const [job, setJob] = useState(() => (isNew ? draft?.job ?? blank() : null));
+  const [touchedTasks, setTouchedTasks] = useState(() => (isNew ? !!draft?.touchedTasks : true));
+  const [restoredAt, setRestoredAt] = useState(() => (isNew && draft ? draft.savedAt : null));
   const [dirty, setDirty] = useState(false);
   const [reload, setReload] = useState(0);
   const [error, setError] = useState(null);
@@ -183,36 +267,26 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
   }, []);
 
   useEffect(() => {
-    if (!jobId) return;
-    api(`/api/jobs/${jobId}/edit`)
-      .then((j) => {
-        const saved = reload === 0 ? safeGet(key) : null;
-        if (saved?.job) {
-          setJob(saved.job);
-          setRestoredAt(saved.savedAt);
-          return;
-        }
-        setJob({
-          ...j,
-          parcel_id: j.parcel_id ?? "",
-          contract_amount: j.contract_amount ?? "",
-          estimated_labor_rate: j.estimated_labor_rate ?? "",
-          sales_tax_pct: j.sales_tax_pct || "",
-          tasks: j.tasks.map((t) => ({ ...t, key: t.id })),
-          cost_lines: (j.cost_lines ?? []).map((c) => ({ ...c, key: c.id, task_key: c.task_id ?? "" })),
-        });
-      })
+    if (isNew) return;
+    const saved = reload === 0 ? safeGet(draftKey) : null;
+    if (saved?.job) {
+      setJob(saved.job);
+      setRestoredAt(saved.savedAt);
+      return;
+    }
+    load()
+      .then((f) => setJob(linkTaskKeys(f)))
       .catch((e) => setError(e.message));
-  }, [jobId, reload]);
+  }, [draftKey, reload]);
 
   // Keep a copy of unsaved work on this device after every change.
   useEffect(() => {
-    if (dirty && job) safeSet(key, { job, touchedTasks, savedAt: Date.now() });
+    if (dirty && job) safeSet(draftKey, { job, touchedTasks, savedAt: Date.now() });
   }, [dirty, job, touchedTasks]);
 
   const est = useMemo(() => (job ? estimateOf(job) : null), [job]);
 
-  if (!job) return <p className="empty">{error ? `Couldn't load the job: ${error}` : "Loading job…"}</p>;
+  if (!job) return <p className="empty">{error ? `Couldn't load it: ${error}` : "Loading…"}</p>;
 
   // Every edit goes through here so it's marked unsaved and kept as a draft.
   const change = (fn) => {
@@ -227,18 +301,18 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
   };
 
   function startOver() {
-    safeSet(key, null);
+    safeSet(draftKey, null);
     setRestoredAt(null);
     setDirty(false);
     setBad(null);
     setError(null);
     setLocMsg(null);
-    if (jobId) {
+    if (!isNew) {
       setJob(null);
       setReload((n) => n + 1);
     } else {
       setTouchedTasks(false);
-      setJob(blankJob());
+      setJob(blank());
     }
   }
 
@@ -283,12 +357,12 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
   const removeLine = (i) => change((j) => ({ ...j, cost_lines: j.cost_lines.filter((_, n) => n !== i) }));
   const addLine = (category) => change((j) => ({ ...j, cost_lines: [...j.cost_lines, blankLine(category)] }));
 
-  // On a new job, picking court type or scope swaps in the matching starter
+  // On a new form, picking court type or scope swaps in the matching starter
   // list until someone edits the tasks by hand.
   const setKind = (k, v) => {
     change((j) => {
       const next = { ...j, [k]: v };
-      if (!jobId && !touchedTasks) next.tasks = starterTasks(next.court_type, next.scope_type);
+      if (isNew && !touchedTasks) next.tasks = starterTasks(next.court_type, next.scope_type);
       return next;
     });
   };
@@ -328,7 +402,7 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
     requestAnimationFrame(() => {
       const row = document.getElementById(`row-${rowKey}`);
       row?.scrollIntoView({ behavior: "smooth", block: "center" });
-      row?.querySelector("input")?.focus({ preventScroll: true });
+      row?.querySelector("input, select, textarea")?.focus({ preventScroll: true });
     });
   }
 
@@ -336,52 +410,20 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
     e.preventDefault();
     setError(null);
     setBad(null);
+    const own = validate?.(job);
+    if (own) return own.key ? flag(own.key, own.message) : setError(own.message ?? own);
     const missing = job.tasks.findIndex((t) => !t.name.trim());
     if (missing >= 0) return flag(job.tasks[missing].key, `Task ${missing + 1} needs a name. It's marked in red above.`);
     const noDesc = job.cost_lines.findIndex((c) => !c.description.trim());
     if (noDesc >= 0)
       return flag(job.cost_lines[noDesc].key, `Line ${noDesc + 1} (${CATEGORY_LABEL[job.cost_lines[noDesc].category]}) needs a name. It's marked in red above.`);
     setSaving(true);
-    const body = {
-      name: job.name.trim(),
-      client: job.client.trim(),
-      address: job.address.trim(),
-      parcel_id: (job.parcel_id ?? "").trim(),
-      lat: job.lat === "" ? null : job.lat,
-      lng: job.lng === "" ? null : job.lng,
-      court_type: job.court_type,
-      scope_type: job.scope_type,
-      contract_amount: num(job.contract_amount),
-      estimated_labor_rate: num(job.estimated_labor_rate),
-      sales_tax_pct: num(job.sales_tax_pct),
-      cost_lines: job.cost_lines.map((c) => {
-        const ti = c.task_key ? job.tasks.findIndex((t) => t.key === c.task_key) : -1;
-        return {
-          ...(c.id ? { id: c.id } : {}),
-          category: c.category,
-          description: c.description.trim(),
-          quantity: num(c.quantity),
-          unit: (c.unit ?? "").trim(),
-          unit_cost: num(c.unit_cost),
-          task_index: ti >= 0 ? ti : null,
-          item_id: c.item_id || null,
-        };
-      }),
-      tasks: job.tasks.map((t) => ({
-        ...(t.id ? { id: t.id } : {}),
-        task_type: t.task_type,
-        name: t.name.trim(),
-        estimated_hours: num(t.estimated_hours),
-      })),
-    };
     try {
-      const saved = jobId
-        ? await api(`/api/jobs/${jobId}`, { method: "PUT", body })
-        : await api("/api/jobs", { method: "POST", body });
-      safeSet(key, null);
-      onDone(saved.id);
+      const result = await submit(job, scopeBody(job));
+      safeSet(draftKey, null);
+      onDone(result);
     } catch (err) {
-      setError(err.status === 0 ? "No connection. Your work is kept on this phone; save again when you have signal." : err.message);
+      setError(err.status === 0 ? "No connection. Your work is kept on this device; save again when you have signal." : err.message);
       setSaving(false);
     }
   }
@@ -392,29 +434,33 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
   return (
     <form className="editor" onSubmit={save}>
       <button type="button" className="link back" onClick={onCancel}>
-        {jobId ? "Back to job" : "All jobs"}
+        {backLabel}
       </button>
-      <h2 className="detail-title">{jobId ? "Edit job" : "New job"}</h2>
+      <h2 className="detail-title">{title}</h2>
 
       {restoredAt && (
         <div className="restored" role="status">
           <span>Picked up your unsaved work from {savedAtText(restoredAt)}.</span>
           <button type="button" className="link" onClick={startOver}>
-            {jobId ? "Throw it away" : "Start over"}
+            {isNew ? "Start over" : "Throw it away"}
           </button>
         </div>
       )}
 
       <section className="panel">
-        <h3>Job</h3>
+        <h3>{labels.panel ?? "Job"}</h3>
         <div className="grid">
+          {clientField ? (
+            <div className="span-2">{clientField(job, set)}</div>
+          ) : (
+            <label className="span-2">
+              Client
+              <input value={job.client} onChange={(e) => set("client", e.target.value)} />
+            </label>
+          )}
           <label className="span-2">
-            Job name
-            <input required value={job.name} onChange={(e) => set("name", e.target.value)} placeholder="Client – court count and work" />
-          </label>
-          <label className="span-2">
-            Client
-            <input value={job.client} onChange={(e) => set("client", e.target.value)} />
+            {L.name}
+            <input required value={job.name} onChange={(e) => set("name", e.target.value)} placeholder={L.namePlaceholder} />
           </label>
           <label>
             Court type
@@ -437,7 +483,7 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
             </select>
           </label>
           <label>
-            Contract amount
+            {L.price}
             <span className="affix">
               <span aria-hidden="true">$</span>
               <NumInput value={job.contract_amount} onChange={(v) => set("contract_amount", v)} placeholder="0" />
@@ -452,9 +498,10 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
             </span>
           </label>
         </div>
+        {extraTop?.(job, set)}
 
         <fieldset className="where">
-          <legend>Job location</legend>
+          <legend>{labels.where ?? "Job location"}</legend>
           <p className="help">The pin flags clock-ins made away from the site. Find it from the address, or stand on the court and use your location.</p>
           <div className="grid">
             <label className="span-2">
@@ -511,7 +558,7 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
       <section className="panel">
         <div className="panel-head">
           <h3>Tasks and estimated hours</h3>
-          {!jobId && !touchedTasks && <span className="hint">Starter list for this court type and scope</span>}
+          {isNew && !touchedTasks && <span className="hint">Starter list for this court type and scope</span>}
         </div>
         <ol className="task-edit">
           {job.tasks.map((t, i) => (
@@ -640,7 +687,7 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
                 </span>
                 <label className="le-task">
                   <span className="le-label">For task</span>
-                  <select value={c.task_key} onChange={(e) => setLine(i, "task_key", e.target.value)}>
+                  <select value={c.task_key ?? ""} onChange={(e) => setLine(i, "task_key", e.target.value)}>
                     <option value="">Whole job</option>
                     {job.tasks.map((t, ti) => (
                       <option key={t.key} value={t.key}>{t.name || `Task ${ti + 1}`}</option>
@@ -672,11 +719,14 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
         </div>
       </section>
 
+      {extraPanels?.(job, set)}
+
       <section className="panel">
-        <h3>Estimate</h3>
-        <EstimateTable est={est} taxPct={num(job.sales_tax_pct)} />
+        <h3>{labels.summary ?? "Estimate"}</h3>
+        <EstimateTable est={est} taxPct={num(job.sales_tax_pct)} priceLabel={L.priceRow} />
       </section>
 
+      {footer?.(job, set)}
       {error && (
         <p className="alert" role="alert">
           {error}
@@ -687,10 +737,30 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
           Cancel
         </button>
         <button className="btn" type="submit" disabled={saving}>
-          {saving ? "Saving…" : jobId ? "Save changes" : "Create job"}
+          {saving ? "Saving…" : submitLabel}
         </button>
       </div>
       {dirty && <p className="help draft-note">Unsaved changes are kept on this device until you save or start over.</p>}
     </form>
+  );
+}
+
+// A job's own form. New jobs here are ones with no estimate behind them (GM).
+export default function JobEditor({ jobId, onDone, onCancel }) {
+  return (
+    <ScopeEditor
+      draftKey={`cf.draft.job.${jobId ?? "new"}`}
+      load={jobId ? () => api(`/api/jobs/${jobId}/edit`).then(formFrom) : undefined}
+      title={jobId ? "Edit job" : "New job without an estimate"}
+      backLabel={jobId ? "Back to job" : "All jobs"}
+      submitLabel={jobId ? "Save changes" : "Create job"}
+      submit={(f, body) =>
+        (jobId ? api(`/api/jobs/${jobId}`, { method: "PUT", body: { ...body, client: f.client.trim() } }) : api("/api/jobs", { method: "POST", body: { ...body, client: f.client.trim() } })).then(
+          (saved) => saved.id
+        )
+      }
+      onDone={onDone}
+      onCancel={onCancel}
+    />
   );
 }

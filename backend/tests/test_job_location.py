@@ -11,7 +11,7 @@ BODY = {"name": "TEST Parcel Job", "court_type": "tennis", "scope_type": "new_co
 
 
 def test_parcel_id_saves_and_updates(client):
-    r = client.post("/api/jobs", json=BODY, headers=auth(EST))
+    r = client.post("/api/jobs", json=BODY, headers=auth(GM))
     assert r.status_code == 201 and r.json()["parcel_id"] == "3402-501-0012-000-3"
     job_id = r.json()["id"]
     edit = client.get(f"/api/jobs/{job_id}/edit", headers=auth(GM)).json()

@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import (
+    Date,
     DateTime,
     Enum,
     Float,
@@ -21,6 +22,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -42,6 +44,8 @@ class Role(str, enum.Enum):
     crew_lead = "crew_lead"    # field: clocks the crew in and out by task
     crew = "crew"              # field worker; time is entered by the crew lead
     warehouse = "warehouse"    # Phase 2 (materials); read-only for now
+    sales = "sales"            # brings in leads; sees proposal prices, never costs
+    pm = "pm"                  # project manager; same access as an estimator for now
 
 
 class CourtType(str, enum.Enum):
@@ -100,6 +104,16 @@ class Company(Base):
     timezone: Mapped[str] = mapped_column(String(64), default="America/New_York", server_default="America/New_York")
     # First day of the pay week: 0 = Monday ... 6 = Sunday.
     week_start: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # What prints at the top of a proposal. Blank fields are left off.
+    proposal_name: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    proposal_address: Mapped[str] = mapped_column(String(300), default="", server_default="")
+    proposal_phone: Mapped[str] = mapped_column(String(40), default="", server_default="")
+    proposal_email: Mapped[str] = mapped_column(String(254), default="", server_default="")
+    proposal_license: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    proposal_logo_url: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    proposal_terms: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # Days a sent estimate stays good before it's marked expired.
+    estimate_valid_days: Mapped[int] = mapped_column(Integer, default=30, server_default="30")
 
 
 class User(Base):
@@ -178,6 +192,8 @@ class Job(Base):
 
     # Florida contractors pay sales tax on materials; applied to material lines only.
     sales_tax_pct: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    # The client record, when the job came from an estimate or was linked to one.
+    client_id: Mapped[str | None] = mapped_column(ForeignKey("clients.id"), nullable=True, index=True)
 
     cost_lines: Mapped[list[CostLine]] = relationship(
         back_populates="job", order_by="CostLine.sort_order", cascade="all, delete-orphan"
@@ -344,3 +360,145 @@ class LocationPing(Base):
     lng: Mapped[float] = mapped_column(Float)
     accuracy_m: Mapped[float | None] = mapped_column(Float, nullable=True)
     received_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ---------- sales: clients, leads, estimates ----------
+
+class Client(Base):
+    """A customer: an HOA, a school, a city, an apartment complex, a homeowner.
+    Leads, estimates and jobs all point back here. Never deleted; turned off."""
+
+    __tablename__ = "clients"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    contact_name: Mapped[str] = mapped_column(String(200), default="")
+    phone: Mapped[str] = mapped_column(String(40), default="")
+    email: Mapped[str] = mapped_column(String(254), default="")
+    billing_address: Mapped[str] = mapped_column(String(300), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    links: Mapped[str] = mapped_column(Text, default="")  # shared-drive links, one per line
+    active: Mapped[bool] = mapped_column(default=True)
+    created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class LeadStatus(str, enum.Enum):
+    new = "new"                # waiting on an estimator
+    estimating = "estimating"  # an estimate has been started
+    estimated = "estimated"    # the estimate went out to the client
+    dropped = "dropped"        # not pursuing it
+
+
+class Lead(Base):
+    """What sales brings in: who, where, and what they want, with links to
+    plans and photos. An estimator turns it into an estimate."""
+
+    __tablename__ = "leads"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    client_id: Mapped[str] = mapped_column(ForeignKey("clients.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    site_address: Mapped[str] = mapped_column(String(300), default="")
+    parcel_id: Mapped[str] = mapped_column(String(60), default="")
+    court_type: Mapped[CourtType | None] = mapped_column(Enum(CourtType), nullable=True)
+    scope_type: Mapped[ScopeType | None] = mapped_column(Enum(ScopeType), nullable=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    links: Mapped[str] = mapped_column(Text, default="")
+    bid_due: Mapped[date | None] = mapped_column(Date, nullable=True)
+    status: Mapped[LeadStatus] = mapped_column(Enum(LeadStatus), default=LeadStatus.new)
+    status_reason: Mapped[str] = mapped_column(Text, default="")
+    salesperson_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    client: Mapped[Client] = relationship()
+    salesperson: Mapped[User | None] = relationship(foreign_keys=[salesperson_id])
+
+
+class EstimateStatus(str, enum.Enum):
+    draft = "draft"
+    sent = "sent"
+    won = "won"
+    lost = "lost"
+    no_bid = "no_bid"
+    expired = "expired"
+
+
+class Estimate(Base):
+    """A priced scope of work for a client. Its content lives in numbered
+    versions; every save makes a new one and old ones can't be changed."""
+
+    __tablename__ = "estimates"
+    __table_args__ = (UniqueConstraint("company_id", "number", name="uq_estimate_number"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    number: Mapped[str] = mapped_column(String(20))
+    client_id: Mapped[str] = mapped_column(ForeignKey("clients.id"), index=True)
+    lead_id: Mapped[str | None] = mapped_column(ForeignKey("leads.id"), nullable=True, index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    status: Mapped[EstimateStatus] = mapped_column(Enum(EstimateStatus), default=EstimateStatus.draft)
+    salesperson_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    valid_days: Mapped[int] = mapped_column(Integer, default=30)
+    current_version: Mapped[int] = mapped_column(Integer, default=1)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_follow_up_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    job_id: Mapped[str | None] = mapped_column(ForeignKey("jobs.id"), nullable=True)
+    created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    client: Mapped[Client] = relationship()
+    salesperson: Mapped[User | None] = relationship(foreign_keys=[salesperson_id])
+    versions: Mapped[list[EstimateVersion]] = relationship(
+        back_populates="estimate", order_by="EstimateVersion.version", cascade="all"
+    )
+
+
+class EstimateVersion(Base):
+    """One saved copy of an estimate's content, as JSON. Locked once saved;
+    only the GM can remove one, and that's a void with a reason, not a delete."""
+
+    __tablename__ = "estimate_versions"
+    __table_args__ = (UniqueConstraint("estimate_id", "version", name="uq_estimate_version"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    estimate_id: Mapped[str] = mapped_column(ForeignKey("estimates.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    data: Mapped[str] = mapped_column(Text)  # JSON: site, tasks, cost lines, price, proposal text
+    price: Mapped[float] = mapped_column(Float, default=0.0)       # what the client pays
+    total_cost: Mapped[float] = mapped_column(Float, default=0.0)  # what it costs us
+    note: Mapped[str] = mapped_column(Text, default="")             # what changed in this version
+    created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    voided_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    void_reason: Mapped[str] = mapped_column(Text, default="")
+
+    estimate: Mapped[Estimate] = relationship(back_populates="versions")
+    created_by: Mapped[User] = relationship(foreign_keys=[created_by_id])
+
+
+class Activity(Base):
+    """The paper trail: who did what to a client, lead, estimate or job, and
+    when. Rows are only ever added."""
+
+    __tablename__ = "activity"
+    __table_args__ = (Index("ix_activity_subject", "company_id", "kind", "subject_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"))
+    kind: Mapped[str] = mapped_column(String(20))        # client | lead | estimate | job
+    subject_id: Mapped[str] = mapped_column(String(36))
+    action: Mapped[str] = mapped_column(String(200))      # plain words, e.g. "Marked won"
+    detail: Mapped[str] = mapped_column(Text, default="")  # reason, note, or what changed
+    by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)  # empty = automatic
+    at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    by: Mapped[User | None] = relationship()

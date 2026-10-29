@@ -31,6 +31,9 @@ class MeOut(UserOut):
     sees_dollars: bool
     enters_time: bool
     edits_jobs: bool
+    creates_jobs: bool = False
+    estimates: bool = False   # builds estimates, sees their costs
+    sales_side: bool = False  # leads, clients, estimate status and proposals
     manages_stock: bool = False
     edits_prices: bool = False
     sees_locations: bool = False

@@ -48,10 +48,10 @@ def test_estimate_lines_link_to_price_list(client):
             "tasks": [{"task_type": "prep", "name": "Prep", "estimated_hours": 4}],
             "cost_lines": [{"category": "material", "description": "Acrylic resurfacer", "quantity": 6, "unit": "pail",
                             "unit_cost": 120, "item_id": resurfacer["id"]}]}
-    r = client.post("/api/jobs", json=body, headers=auth(EST))
+    r = client.post("/api/jobs", json=body, headers=auth(GM))
     assert r.status_code == 201 and r.json()["cost_lines"][0]["item_id"] == resurfacer["id"]
     body["cost_lines"][0]["item_id"] = "not-a-real-item"
-    assert client.post("/api/jobs", json=body, headers=auth(EST)).status_code == 422
+    assert client.post("/api/jobs", json=body, headers=auth(GM)).status_code == 422
 
 
 # ---------- job material list ----------

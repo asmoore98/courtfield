@@ -28,6 +28,8 @@ ACCOUNTS = {
     "dev-lead-1": ("Marco Diaz", Role.crew_lead, 38),
     "dev-lead-2": ("Jordan Kemp", Role.crew_lead, 36),
     "dev-warehouse": ("Dee Warren", Role.warehouse, 0),
+    "dev-sales": ("Casey Bell", Role.sales, 0),
+    "dev-pm": ("Morgan Reyes", Role.pm, 0),
 }
 CREW = [("Luis Vega", 27), ("Tyler Brooks", 25), ("Andre Wells", 26), ("Kenny Ruiz", 24)]
 
@@ -224,9 +226,86 @@ def seed() -> None:
     db.add(StockMove(company_id=co.id, kind=MoveKind.to_job, item_id=items["Crack filler"].id, job_id=coral.id, description="Crack filler",
                      unit="gal", quantity=2, unit_cost=items["Crack filler"].unit_cost, recorded_by_id=wh.id,
                      note="Found a few cracks at the north baseline"))
+    _seed_sales(db, co, users)
     db.commit()
     db.close()
     print(f"Seeded sample data. Sign in as any of {', '.join(dev_email(k) for k in ACCOUNTS)} with password {DEV_PASSWORD}")
+
+
+def _seed_sales(db, co, users) -> None:
+    """Sample clients, a lead and a few estimates in different states."""
+    from .models import Activity, Client, Estimate, EstimateStatus, EstimateVersion, Lead, LeadStatus
+    from .routers.estimates import totals
+    from .sales_schemas import EstimateData
+
+    gm, est, sales = users["dev-gm"], users["dev-estimator"], users["dev-sales"]
+    clients = {}
+    for job in db.scalars(select(Job).where(Job.company_id == co.id)):
+        if job.client not in clients:
+            clients[job.client] = Client(company_id=co.id, name=job.client, created_by_id=gm.id,
+                                         contact_name="Sample Contact", phone="(555) 010-0100")
+            db.add(clients[job.client])
+            db.flush()
+        job.client_id = clients[job.client].id
+    harbor = Client(company_id=co.id, name="Harbor Pointe Apartments (sample)", contact_name="Dana Ruiz",
+                    phone="(555) 010-0144", email="manager@harborpointe.example", billing_address="100 Sample Way, Stuart, FL 34994",
+                    created_by_id=sales.id)
+    db.add(harbor)
+    db.flush()
+    now = utcnow()
+    lead = Lead(company_id=co.id, client_id=harbor.id, name="Harbor Pointe – 2 pickleball courts, new build",
+                site_address="100 Sample Way, Stuart, FL 34994", court_type=CourtType.pickleball, scope_type=ScopeType.new_construction,
+                description="Wants 2 courts where the old shuffleboard area is. Fenced, lit if the budget allows. Board meets the 15th.",
+                links="https://drive.google.com/drive/folders/sample-site-photos", status=LeadStatus.estimated,
+                salesperson_id=sales.id, created_by_id=sales.id, bid_due=(now + timedelta(days=10)).date())
+    db.add(lead)
+    db.flush()
+
+    def data(price, rate, tasks, lines, **kw):
+        return EstimateData(court_type=kw.pop("court", CourtType.pickleball), scope_type=kw.pop("scope", ScopeType.new_construction),
+                            price=price, estimated_labor_rate=rate, sales_tax_pct=7,
+                            tasks=[{"task_type": t, "name": n, "estimated_hours": h} for t, n, h in tasks],
+                            cost_lines=[{"category": c, "description": d, "quantity": q, "unit": u, "unit_cost": uc} for c, d, q, u, uc in lines],
+                            **kw)
+
+    build = [(TaskType.prep, "Base check & flood test", 8), (TaskType.resurfacer, "Resurfacer (2 coats)", 20),
+             (TaskType.color_coat, "Color coats (2)", 18), (TaskType.lines, "Lines", 6), (TaskType.fence, "Fence", 0),
+             (TaskType.nets_posts, "Posts & nets", 4)]
+    mats = [(CostCategory.material, "Acrylic resurfacer", 24, "pail", 112), (CostCategory.material, "Color coat concentrate", 10, "pail", 168),
+            (CostCategory.subcontractor, "Fence sub (sample)", 1, "job", 9800)]
+    samples = [
+        # (client, name, status, days since sent, [(price, note)], lead)
+        (harbor, "Harbor Pointe – 2 pickleball courts", EstimateStatus.sent, 18,
+         [(46000, "First pass"), (44500, "Dropped lighting per the board; fence height to 10'")], lead),
+        (clients["Seabreeze Club (sample)"], "Seabreeze – pickleball lines on the basketball court", EstimateStatus.draft, None,
+         [(3900, "")], None),
+        (clients["City of Westgate (sample)"], "Westgate Park – 4 court resurface", EstimateStatus.lost, 40,
+         [(31000, "")], None),
+    ]
+    for n, (client, name, status, sent_days, versions, from_lead) in enumerate(samples, start=1):
+        e = Estimate(company_id=co.id, number=f"E-{now.year}-{n:03d}", client_id=client.id, lead_id=from_lead.id if from_lead else None,
+                     name=name, status=status, salesperson_id=sales.id, valid_days=30, current_version=len(versions),
+                     created_by_id=est.id, created_at=now - timedelta(days=(sent_days or 2) + 3))
+        if sent_days is not None:
+            e.sent_at = now - timedelta(days=sent_days)
+        if status == EstimateStatus.lost:
+            e.decided_at = now - timedelta(days=30)
+        db.add(e)
+        db.flush()
+        for vn, (price, note) in enumerate(versions, start=1):
+            d = data(price, 34, build, mats, site_address=client.billing_address, scope_text="Build two post-tensioned pickleball courts with acrylic surfacing, lines, posts and nets.",
+                     exclusions="Permits by owner. Lighting not included.")
+            t = totals(d)
+            db.add(EstimateVersion(company_id=co.id, estimate_id=e.id, version=vn, data=d.model_dump_json(), price=t["price"],
+                                   total_cost=t["total_cost"], note=note, created_by_id=est.id,
+                                   created_at=e.created_at + timedelta(days=vn - 1)))
+            db.add(Activity(company_id=co.id, kind="estimate", subject_id=e.id, action=f"Saved v{vn}" if vn > 1 else f"Started estimate {e.number} (v1)",
+                            detail=note, by_id=est.id, at=e.created_at + timedelta(days=vn - 1)))
+        if e.sent_at:
+            db.add(Activity(company_id=co.id, kind="estimate", subject_id=e.id, action=f"Marked sent (v{len(versions)})", by_id=sales.id, at=e.sent_at))
+        if status == EstimateStatus.lost:
+            db.add(Activity(company_id=co.id, kind="estimate", subject_id=e.id, action="Marked lost", detail="Went with a cheaper bid (sample)",
+                            by_id=sales.id, at=e.decided_at))
 
 
 if __name__ == "__main__":
