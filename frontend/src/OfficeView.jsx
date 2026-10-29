@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { DEMO, api } from "./api";
+import { DEMO, api, safeGet, safeSet } from "./api";
 import JobEditor, { COST_CATEGORIES, EstimateTable } from "./JobEditor";
 import TimeLog from "./TimeLog";
 import JobMaterials from "./JobMaterials";
@@ -263,9 +263,17 @@ function JobDetail({ me, jobId, onBack, onEdit }) {
   );
 }
 
+const SCREEN_KEY = "cf.office.screen";
+
 export default function OfficeView({ me }) {
   // screen: { view: "list" } | { view: "job", id } | { view: "edit", id? }
-  const [screen, setScreen] = useState({ view: "list" });
+  // An open job editor is remembered, so switching tabs and coming back lands
+  // on the same form (its unsaved work is kept as a draft by the editor).
+  const [screen, setScreenState] = useState(() => safeGet(SCREEN_KEY) ?? { view: "list" });
+  const setScreen = (s) => {
+    safeSet(SCREEN_KEY, s.view === "edit" ? s : null);
+    setScreenState(s);
+  };
   const toList = () => setScreen({ view: "list" });
   if (screen.view === "edit")
     return (

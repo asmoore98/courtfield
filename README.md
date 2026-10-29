@@ -94,5 +94,4 @@ alembic upgrade head
 ## Still to do
 
 - **Direct payroll and accounting connections** (QuickBooks or whatever the pilot uses). The CSV covers payroll until then.
-- **Address lookup.** Job location is entered as coordinates or taken from the device; turning an address into a map pin needs a geocoding service.
 - **Email delivery of sign-in links.** Links are copied and texted by the GM for now.

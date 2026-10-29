@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { api } from "./api";
+import { DEMO, api, safeGet, safeSet } from "./api";
 import { getPosition } from "./fieldStore";
+import NumInput from "./NumInput";
 
 export const COURT_TYPES = [
   ["tennis", "Tennis"],
@@ -72,6 +73,7 @@ const blankJob = () => ({
   name: "",
   client: "",
   address: "",
+  parcel_id: "",
   lat: null,
   lng: null,
   court_type: "pickleball",
@@ -109,6 +111,12 @@ export function estimateOf(job) {
 const num = (v) => (v === "" || v == null ? 0 : Number(v));
 const money = (n) => n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
 const money2 = (n) => n.toLocaleString("en-US", { style: "currency", currency: "USD" });
+const CATEGORY_LABEL = Object.fromEntries(COST_CATEGORIES.map(([v, l]) => [v, l]));
+
+// Unsaved work is kept on this device until it's saved or thrown away, so
+// tapping another tab (or the phone killing the app) doesn't lose it.
+const draftKey = (jobId) => `cf.draft.job.${jobId ?? "new"}`;
+const savedAtText = (t) => new Date(t).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 
 // Cost breakdown and expected profit. Shared by the editor and the job page.
 export function EstimateTable({ est, taxPct }) {
@@ -155,11 +163,19 @@ export function EstimateTable({ est, taxPct }) {
 }
 
 export default function JobEditor({ jobId, onDone, onCancel }) {
-  const [job, setJob] = useState(jobId ? null : blankJob);
-  const [touchedTasks, setTouchedTasks] = useState(!!jobId);
+  const key = draftKey(jobId);
+  const [draft] = useState(() => safeGet(key));
+  const [job, setJob] = useState(() => (jobId ? null : draft?.job ?? blankJob()));
+  const [touchedTasks, setTouchedTasks] = useState(() => (jobId ? true : !!draft?.touchedTasks));
+  const [restoredAt, setRestoredAt] = useState(() => (!jobId && draft ? draft.savedAt : null));
+  const [dirty, setDirty] = useState(false);
+  const [reload, setReload] = useState(0);
   const [error, setError] = useState(null);
+  const [bad, setBad] = useState(null); // key of the task or cost line the error points at
   const [saving, setSaving] = useState(false);
   const [locating, setLocating] = useState(false);
+  const [finding, setFinding] = useState(false);
+  const [locMsg, setLocMsg] = useState(null); // { tone: "ok" | "err", text }
   const [items, setItems] = useState([]);
 
   useEffect(() => {
@@ -169,47 +185,89 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
   useEffect(() => {
     if (!jobId) return;
     api(`/api/jobs/${jobId}/edit`)
-      .then((j) =>
+      .then((j) => {
+        const saved = reload === 0 ? safeGet(key) : null;
+        if (saved?.job) {
+          setJob(saved.job);
+          setRestoredAt(saved.savedAt);
+          return;
+        }
         setJob({
           ...j,
+          parcel_id: j.parcel_id ?? "",
           contract_amount: j.contract_amount ?? "",
           estimated_labor_rate: j.estimated_labor_rate ?? "",
           sales_tax_pct: j.sales_tax_pct || "",
           tasks: j.tasks.map((t) => ({ ...t, key: t.id })),
           cost_lines: (j.cost_lines ?? []).map((c) => ({ ...c, key: c.id, task_key: c.task_id ?? "" })),
-        })
-      )
+        });
+      })
       .catch((e) => setError(e.message));
-  }, [jobId]);
+  }, [jobId, reload]);
+
+  // Keep a copy of unsaved work on this device after every change.
+  useEffect(() => {
+    if (dirty && job) safeSet(key, { job, touchedTasks, savedAt: Date.now() });
+  }, [dirty, job, touchedTasks]);
 
   const est = useMemo(() => (job ? estimateOf(job) : null), [job]);
 
   if (!job) return <p className="empty">{error ? `Couldn't load the job: ${error}` : "Loading job…"}</p>;
 
-  const set = (k, v) => setJob((j) => ({ ...j, [k]: v }));
+  // Every edit goes through here so it's marked unsaved and kept as a draft.
+  const change = (fn) => {
+    setDirty(true);
+    setJob(fn);
+  };
+  const clearBad = (k) => {
+    if (bad === k) {
+      setBad(null);
+      setError(null);
+    }
+  };
+
+  function startOver() {
+    safeSet(key, null);
+    setRestoredAt(null);
+    setDirty(false);
+    setBad(null);
+    setError(null);
+    setLocMsg(null);
+    if (jobId) {
+      setJob(null);
+      setReload((n) => n + 1);
+    } else {
+      setTouchedTasks(false);
+      setJob(blankJob());
+    }
+  }
+
+  const set = (k, v) => change((j) => ({ ...j, [k]: v }));
   const setTask = (i, k, v) => {
     setTouchedTasks(true);
-    setJob((j) => ({ ...j, tasks: j.tasks.map((t, n) => (n === i ? { ...t, [k]: v } : t)) }));
+    if (k === "name") clearBad(job.tasks[i].key);
+    change((j) => ({ ...j, tasks: j.tasks.map((t, n) => (n === i ? { ...t, [k]: v } : t)) }));
   };
   const moveTask = (i, d) =>
-    setJob((j) => {
+    change((j) => {
       const tasks = [...j.tasks];
       [tasks[i], tasks[i + d]] = [tasks[i + d], tasks[i]];
       return { ...j, tasks };
     });
-  const removeTask = (i) => setJob((j) => ({ ...j, tasks: j.tasks.filter((_, n) => n !== i) }));
+  const removeTask = (i) => change((j) => ({ ...j, tasks: j.tasks.filter((_, n) => n !== i) }));
   const addTask = () => {
     setTouchedTasks(true);
-    setJob((j) => ({
+    change((j) => ({
       ...j,
-      tasks: [...j.tasks, { key: crypto.randomUUID?.() ?? String(Math.random()), task_type: "other", name: "", estimated_hours: "" }],
+      tasks: [...j.tasks, { key: newKey(), task_type: "other", name: "", estimated_hours: "" }],
     }));
   };
 
-  const setLine = (i, k, v) => setJob((j) => ({ ...j, cost_lines: j.cost_lines.map((c, n) => (n === i ? { ...c, [k]: v } : c)) }));
+  const setLine = (i, k, v) => change((j) => ({ ...j, cost_lines: j.cost_lines.map((c, n) => (n === i ? { ...c, [k]: v } : c)) }));
   // Typing or picking a price-list name fills in its type, unit and cost.
-  const setLineName = (i, v) =>
-    setJob((j) => ({
+  const setLineName = (i, v) => {
+    clearBad(job.cost_lines[i].key);
+    change((j) => ({
       ...j,
       cost_lines: j.cost_lines.map((c, n) => {
         if (n !== i) return c;
@@ -220,40 +278,75 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
         return { ...c, description: v };
       }),
     }));
+  };
   const itemById = Object.fromEntries(items.map((it) => [it.id, it]));
-  const removeLine = (i) => setJob((j) => ({ ...j, cost_lines: j.cost_lines.filter((_, n) => n !== i) }));
-  const addLine = (category) => setJob((j) => ({ ...j, cost_lines: [...j.cost_lines, blankLine(category)] }));
+  const removeLine = (i) => change((j) => ({ ...j, cost_lines: j.cost_lines.filter((_, n) => n !== i) }));
+  const addLine = (category) => change((j) => ({ ...j, cost_lines: [...j.cost_lines, blankLine(category)] }));
 
   // On a new job, picking court type or scope swaps in the matching starter
   // list until someone edits the tasks by hand.
   const setKind = (k, v) => {
-    setJob((j) => {
+    change((j) => {
       const next = { ...j, [k]: v };
       if (!jobId && !touchedTasks) next.tasks = starterTasks(next.court_type, next.scope_type);
       return next;
     });
   };
 
+  const setPin = (lat, lng) => change((j) => ({ ...j, lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6 }));
+
   async function useMyLocation() {
+    setLocMsg(null);
     setLocating(true);
     const pos = await getPosition(8000);
     setLocating(false);
-    if (pos) setJob((j) => ({ ...j, lat: Math.round(pos.lat * 1e6) / 1e6, lng: Math.round(pos.lng * 1e6) / 1e6 }));
-    else setError("Couldn't get this device's location. Check location permission, or enter the coordinates.");
+    if (pos) {
+      setPin(pos.lat, pos.lng);
+      setLocMsg({ tone: "ok", text: "Pin set where this phone is now." });
+    } else setLocMsg({ tone: "err", text: "Couldn't get this device's location. Check location permission, or find the address instead." });
+  }
+
+  async function findAddress() {
+    setLocMsg(null);
+    if (job.address.trim().length < 5) return setLocMsg({ tone: "err", text: "Type the street address, city and ZIP first." });
+    setFinding(true);
+    try {
+      const hit = await api(`/api/geocode?address=${encodeURIComponent(job.address.trim())}`);
+      setPin(hit.lat, hit.lng);
+      setLocMsg({ tone: "ok", text: `Pin set at ${hit.matched_address || "that address"}. Check it on the map.` });
+    } catch (e) {
+      setLocMsg({ tone: "err", text: e.status === 0 ? "No connection. Finding an address needs signal." : e.message });
+    } finally {
+      setFinding(false);
+    }
+  }
+
+  // Point at the row that's wrong: mark it red, scroll to it, put the cursor in it.
+  function flag(rowKey, message) {
+    setBad(rowKey);
+    setError(message);
+    requestAnimationFrame(() => {
+      const row = document.getElementById(`row-${rowKey}`);
+      row?.scrollIntoView({ behavior: "smooth", block: "center" });
+      row?.querySelector("input")?.focus({ preventScroll: true });
+    });
   }
 
   async function save(e) {
     e.preventDefault();
     setError(null);
+    setBad(null);
     const missing = job.tasks.findIndex((t) => !t.name.trim());
-    if (missing >= 0) return setError(`Task ${missing + 1} needs a name.`);
+    if (missing >= 0) return flag(job.tasks[missing].key, `Task ${missing + 1} needs a name. It's marked in red above.`);
     const noDesc = job.cost_lines.findIndex((c) => !c.description.trim());
-    if (noDesc >= 0) return setError(`Cost line ${noDesc + 1} needs a description.`);
+    if (noDesc >= 0)
+      return flag(job.cost_lines[noDesc].key, `Line ${noDesc + 1} (${CATEGORY_LABEL[job.cost_lines[noDesc].category]}) needs a name. It's marked in red above.`);
     setSaving(true);
     const body = {
       name: job.name.trim(),
       client: job.client.trim(),
       address: job.address.trim(),
+      parcel_id: (job.parcel_id ?? "").trim(),
       lat: job.lat === "" ? null : job.lat,
       lng: job.lng === "" ? null : job.lng,
       court_type: job.court_type,
@@ -285,14 +378,16 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
       const saved = jobId
         ? await api(`/api/jobs/${jobId}`, { method: "PUT", body })
         : await api("/api/jobs", { method: "POST", body });
+      safeSet(key, null);
       onDone(saved.id);
     } catch (err) {
-      setError(err.message);
+      setError(err.status === 0 ? "No connection. Your work is kept on this phone; save again when you have signal." : err.message);
       setSaving(false);
     }
   }
 
   const noHours = job.tasks.filter((t) => num(t.estimated_hours) === 0).length;
+  const hasPin = job.lat != null && job.lat !== "" && job.lng != null && job.lng !== "";
 
   return (
     <form className="editor" onSubmit={save}>
@@ -301,6 +396,15 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
       </button>
       <h2 className="detail-title">{jobId ? "Edit job" : "New job"}</h2>
 
+      {restoredAt && (
+        <div className="restored" role="status">
+          <span>Picked up your unsaved work from {savedAtText(restoredAt)}.</span>
+          <button type="button" className="link" onClick={startOver}>
+            {jobId ? "Throw it away" : "Start over"}
+          </button>
+        </div>
+      )}
+
       <section className="panel">
         <h3>Job</h3>
         <div className="grid">
@@ -308,13 +412,9 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
             Job name
             <input required value={job.name} onChange={(e) => set("name", e.target.value)} placeholder="Client – court count and work" />
           </label>
-          <label>
+          <label className="span-2">
             Client
             <input value={job.client} onChange={(e) => set("client", e.target.value)} />
-          </label>
-          <label>
-            Address
-            <input value={job.address} onChange={(e) => set("address", e.target.value)} />
           </label>
           <label>
             Court type
@@ -340,14 +440,14 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
             Contract amount
             <span className="affix">
               <span aria-hidden="true">$</span>
-              <input inputMode="decimal" type="number" min="0" step="any" value={job.contract_amount} onChange={(e) => set("contract_amount", e.target.value)} />
+              <NumInput value={job.contract_amount} onChange={(v) => set("contract_amount", v)} placeholder="0" />
             </span>
           </label>
           <label>
             Labor rate used in the estimate
             <span className="affix">
               <span aria-hidden="true">$</span>
-              <input inputMode="decimal" type="number" min="0" step="any" value={job.estimated_labor_rate} onChange={(e) => set("estimated_labor_rate", e.target.value)} />
+              <NumInput value={job.estimated_labor_rate} onChange={(v) => set("estimated_labor_rate", v)} placeholder="0.00" />
               <span aria-hidden="true">/ hr</span>
             </span>
           </label>
@@ -355,11 +455,35 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
 
         <fieldset className="where">
           <legend>Job location</legend>
-          <p className="help">Used to flag clock-ins made away from the site. Easiest from a phone standing on the court.</p>
-          <div className="where-row">
+          <p className="help">The pin flags clock-ins made away from the site. Find it from the address, or stand on the court and use your location.</p>
+          <div className="grid">
+            <label className="span-2">
+              Street address
+              <input value={job.address} onChange={(e) => set("address", e.target.value)} placeholder="Street, city, ZIP" autoComplete="off" />
+            </label>
+            <label className="span-2">
+              <span>
+                Parcel ID <span className="optional">(optional)</span>
+              </span>
+              <input value={job.parcel_id ?? ""} onChange={(e) => set("parcel_id", e.target.value)} placeholder="For new lots without an address yet" autoComplete="off" maxLength={60} />
+            </label>
+          </div>
+          <div className="where-buttons">
+            {!DEMO && (
+              <button type="button" className="btn-ghost" onClick={findAddress} disabled={finding}>
+                {finding ? "Finding address…" : "Find this address"}
+              </button>
+            )}
             <button type="button" className="btn-ghost" onClick={useMyLocation} disabled={locating}>
               {locating ? "Finding location…" : "Use my current location"}
             </button>
+          </div>
+          {locMsg && (
+            <p className={locMsg.tone === "err" ? "loc-msg err" : "loc-msg"} role={locMsg.tone === "err" ? "alert" : "status"}>
+              {locMsg.text}
+            </p>
+          )}
+          <div className="where-row">
             <label>
               Latitude
               <input type="number" step="any" min="-90" max="90" value={job.lat ?? ""} onChange={(e) => set("lat", e.target.value === "" ? null : Number(e.target.value))} />
@@ -369,6 +493,18 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
               <input type="number" step="any" min="-180" max="180" value={job.lng ?? ""} onChange={(e) => set("lng", e.target.value === "" ? null : Number(e.target.value))} />
             </label>
           </div>
+          <p className="help pin-status">
+            {hasPin ? (
+              <>
+                Pin is set.{" "}
+                <a href={`https://www.google.com/maps/search/?api=1&query=${job.lat},${job.lng}`} target="_blank" rel="noopener noreferrer">
+                  Check it on the map
+                </a>
+              </>
+            ) : (
+              "No pin yet. Clock-ins can't be checked against the site until it's set."
+            )}
+          </p>
         </fieldset>
       </section>
 
@@ -379,13 +515,13 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
         </div>
         <ol className="task-edit">
           {job.tasks.map((t, i) => (
-            <li key={t.key}>
+            <li key={t.key} id={`row-${t.key}`} className={bad === t.key ? "is-invalid" : undefined}>
               <span className="task-num" aria-hidden="true">
                 {i + 1}
               </span>
               <label className="te-name">
                 <span className="sr-only">Task {i + 1} name</span>
-                <input value={t.name} onChange={(e) => setTask(i, "name", e.target.value)} placeholder="Task name" />
+                <input value={t.name} onChange={(e) => setTask(i, "name", e.target.value)} placeholder="Task name" aria-invalid={bad === t.key || undefined} />
               </label>
               <label className="te-type">
                 <span className="sr-only">Task {i + 1} type</span>
@@ -399,15 +535,7 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
               </label>
               <label className="te-hours">
                 <span className="sr-only">Task {i + 1} estimated hours</span>
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.5"
-                  value={t.estimated_hours}
-                  onChange={(e) => setTask(i, "estimated_hours", e.target.value)}
-                  placeholder="0"
-                />
+                <NumInput value={t.estimated_hours} onChange={(v) => setTask(i, "estimated_hours", v)} placeholder="0" />
                 <span aria-hidden="true">h</span>
               </label>
               <span className="te-tools">
@@ -436,7 +564,7 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
         </button>
 
         <p className="subtotal">
-          <b>{Math.round(est.hours * 10) / 10} crew hours</b> at {money(num(job.estimated_labor_rate))}/hr = <b>{money(est.labor)}</b> labor
+          <b>{Math.round(est.hours * 10) / 10} crew hours</b> at {money2(num(job.estimated_labor_rate))}/hr = <b>{money(est.labor)}</b> labor
         </p>
         {noHours > 0 && (
           <p className="help">
@@ -467,10 +595,10 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
               <span>Item</span><span>Type</span><span>Qty</span><span>Unit</span><span>Cost per unit</span><span>Total</span><span>For task</span><span />
             </li>
             {job.cost_lines.map((c, i) => (
-              <li key={c.key}>
+              <li key={c.key} id={`row-${c.key}`} data-cat={c.category} className={bad === c.key ? "is-invalid" : undefined}>
                 <label className="le-desc">
-                  <span className="sr-only">Line {i + 1} item</span>
-                  <input list="cf-items" value={c.description} onChange={(e) => setLineName(i, e.target.value)} placeholder={items.length ? "Pick from the price list or type" : "e.g. Acrylic resurfacer"} />
+                  <span className="le-label">Line {i + 1} · {CATEGORY_LABEL[c.category]}</span>
+                  <input list="cf-items" value={c.description} onChange={(e) => setLineName(i, e.target.value)} placeholder={items.length ? "Pick from the price list or type" : "e.g. Acrylic resurfacer"} aria-invalid={bad === c.key || undefined} />
                   {c.item_id && itemById[c.item_id] && (
                     <span className="le-from">
                       Price list
@@ -484,7 +612,7 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
                   )}
                 </label>
                 <label className="le-cat">
-                  <span className="sr-only">Line {i + 1} type</span>
+                  <span className="le-label">Type</span>
                   <select value={c.category} onChange={(e) => setLine(i, "category", e.target.value)}>
                     {COST_CATEGORIES.map(([v, l]) => (
                       <option key={v} value={v}>{l}</option>
@@ -492,23 +620,26 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
                   </select>
                 </label>
                 <label className="le-qty">
-                  <span className="sr-only">Line {i + 1} quantity</span>
-                  <input type="number" inputMode="decimal" min="0" step="any" value={c.quantity} onChange={(e) => setLine(i, "quantity", e.target.value)} placeholder="0" />
+                  <span className="le-label">Qty</span>
+                  <NumInput decimals={3} value={c.quantity} onChange={(v) => setLine(i, "quantity", v)} placeholder="0" />
                 </label>
                 <label className="le-unit">
-                  <span className="sr-only">Line {i + 1} unit</span>
+                  <span className="le-label">Unit</span>
                   <input list="cf-units" value={c.unit} onChange={(e) => setLine(i, "unit", e.target.value)} placeholder="unit" maxLength={20} />
                 </label>
                 <label className="le-cost">
-                  <span className="sr-only">Line {i + 1} cost per unit</span>
+                  <span className="le-label">Cost per unit</span>
                   <span className="affix">
                     <span aria-hidden="true">$</span>
-                    <input type="number" inputMode="decimal" min="0" step="0.01" value={c.unit_cost} onChange={(e) => setLine(i, "unit_cost", e.target.value)} placeholder="0.00" />
+                    <NumInput value={c.unit_cost} onChange={(v) => setLine(i, "unit_cost", v)} placeholder="0.00" />
                   </span>
                 </label>
-                <span className="le-total" aria-label={`Line ${i + 1} total`}>{money2(num(c.quantity) * num(c.unit_cost))}</span>
+                <span className="le-total">
+                  <span className="le-label">Line total</span>
+                  <span>{money2(num(c.quantity) * num(c.unit_cost))}</span>
+                </span>
                 <label className="le-task">
-                  <span className="sr-only">Line {i + 1} task</span>
+                  <span className="le-label">For task</span>
                   <select value={c.task_key} onChange={(e) => setLine(i, "task_key", e.target.value)}>
                     <option value="">Whole job</option>
                     {job.tasks.map((t, ti) => (
@@ -559,6 +690,7 @@ export default function JobEditor({ jobId, onDone, onCancel }) {
           {saving ? "Saving…" : jobId ? "Save changes" : "Create job"}
         </button>
       </div>
+      {dirty && <p className="help draft-note">Unsaved changes are kept on this device until you save or start over.</p>}
     </form>
   );
 }

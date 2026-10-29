@@ -164,6 +164,8 @@ class Job(Base):
     name: Mapped[str] = mapped_column(String(200))
     client: Mapped[str] = mapped_column(String(200), default="")
     address: Mapped[str] = mapped_column(String(300), default="")
+    # County parcel ID. New construction often has no street address yet.
+    parcel_id: Mapped[str] = mapped_column(String(60), default="", server_default="")
     lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     lng: Mapped[float | None] = mapped_column(Float, nullable=True)
     court_type: Mapped[CourtType] = mapped_column(Enum(CourtType))
