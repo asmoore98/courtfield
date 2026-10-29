@@ -31,9 +31,64 @@ function useLoad(path, deps = []) {
   return state;
 }
 
+// Won estimates that don't have a job yet: one tap turns each into a job.
+function WonEstimates({ me, onOpen }) {
+  const [won, setWon] = useState([]);
+  const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    if (!me.estimates || DEMO) return;
+    api("/api/estimates?status=won")
+      .then((rows) => setWon(rows.filter((e) => !e.job_id)))
+      .catch(() => {});
+  }, [me.estimates]);
+  if (!won.length) return null;
+  async function make(e) {
+    setError(null);
+    setBusy(e.id);
+    try {
+      const { job_id } = await api(`/api/estimates/${e.id}/create-job`, { method: "POST" });
+      onOpen(job_id);
+    } catch (err) {
+      setError(err.message);
+      setBusy(null);
+    }
+  }
+  return (
+    <section className="panel won-waiting">
+      <h3>Jobs ready to be scheduled</h3>
+      <p className="help">These estimates were won. Create the job to get it on the schedule.</p>
+      <ul className="row-list">
+        {won.map((e) => (
+          <li key={e.id}>
+            <div className="row-btn">
+              <span className="row-main">
+                <b>{e.name}</b>
+                <span className="sub">
+                  {e.number} · {e.client_name} · {money(e.price)}
+                </span>
+              </span>
+              <button className="btn" onClick={() => make(e)} disabled={busy === e.id}>
+                {busy === e.id ? "Creating…" : "Create job"}
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {error && (
+        <p className="alert" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
 function JobList({ me, onOpen, onNew }) {
   const { data, error } = useLoad("/api/jobs/summary");
   const newButton = (
+    <>
+    <WonEstimates me={me} onOpen={onOpen} />
     <div className="list-head spread">
       <p className="help">Jobs come from won estimates.{me.creates_jobs && " For a callback or small job with no estimate:"}</p>
       {me.creates_jobs && (
@@ -42,6 +97,7 @@ function JobList({ me, onOpen, onNew }) {
         </button>
       )}
     </div>
+    </>
   );
   if (error && !data) return <p className="empty">Couldn't load jobs: {error}</p>;
   if (!data) return <p className="empty">Loading jobs…</p>;

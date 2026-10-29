@@ -792,3 +792,12 @@ tbody th { font-weight: 600; }
   background: var(--panel); color: var(--asphalt); font: inherit;
 }
 .panel > .note-action, .panel > .btn-ghost.danger { margin-bottom: 12px; }
+.won-waiting { border-color: var(--under); margin: 0 0 16px; }
+.won-waiting h3 { color: var(--under); }
+.won-waiting .row-btn { cursor: default; }
+.won-waiting .row-btn .btn { min-height: 44px; flex: none; }
+.tab-count {
+  display: inline-block; min-width: 20px; margin-left: 6px; padding: 0 6px; border-radius: 999px;
+  background: var(--under); color: #fff; font-size: 0.8rem; font-weight: 700; line-height: 20px; text-align: center;
+}
+.won-waiting .help { margin-top: -4px; }

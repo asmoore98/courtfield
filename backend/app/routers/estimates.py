@@ -295,12 +295,14 @@ def set_status(estimate_id: str, body: EstimateStatusIn, user: User = Depends(sa
         e.decided_at = None
     verb = "Re-sent" if old == body.status == EstimateStatus.sent else f"Marked {STATUS_WORDS[body.status.value].lower()}"
     log(db, user, "estimate", e.id, f"{verb} (v{e.current_version})", body.note.strip())
-    if body.status == EstimateStatus.sent and e.lead_id:
+    if e.lead_id:
         lead = db.get(Lead, e.lead_id)
-        if lead and lead.status in (LeadStatus.new, LeadStatus.estimating):
-            lead.status = LeadStatus.estimated
+        if lead:
             lead.updated_at = now
-            log(db, user, "lead", lead.id, f"Estimate {e.number} sent to the client")
+            if body.status == EstimateStatus.sent and lead.status in (LeadStatus.new, LeadStatus.estimating):
+                lead.status = LeadStatus.estimated
+            words = "sent to the client" if body.status == EstimateStatus.sent else f"marked {STATUS_WORDS[body.status.value].lower()}"
+            log(db, user, "lead", lead.id, f"Estimate {e.number} {words}", body.note.strip())
     db.commit()
     return estimate_row(db, e, user)
 

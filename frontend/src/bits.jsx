@@ -205,7 +205,16 @@ export const ESTIMATE_STATUS = [
   ["no_bid", "No bid"],
   ["expired", "Expired"],
 ];
-export const LEAD_STATUS = { new: "New", estimating: "Being estimated", estimated: "Estimate sent", dropped: "Dropped" };
+export const LEAD_STATUS = {
+  new: "New",
+  estimating: "Being estimated",
+  estimated: "Estimate sent",
+  won: "Won",
+  lost: "Lost",
+  no_bid: "No bid",
+  expired: "Estimate expired",
+  dropped: "Dropped",
+};
 
 export function StatusChip({ status, label }) {
   return <span className={`chip st-${status}`}>{label ?? Object.fromEntries(ESTIMATE_STATUS)[status] ?? LEAD_STATUS[status] ?? status}</span>;

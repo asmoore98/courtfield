@@ -199,6 +199,15 @@ export default function App() {
 
   useEffect(() => onSignedOut(signOut), []);
 
+  // Won estimates still waiting to become jobs, shown as a count on the Jobs tab.
+  const [readyCount, setReadyCount] = useState(0);
+  useEffect(() => {
+    if (!me?.estimates || DEMO) return;
+    api("/api/estimates?status=won")
+      .then((rows) => setReadyCount(rows.filter((e) => !e.job_id).length))
+      .catch(() => {});
+  }, [me?.estimates, mode, nav.n]);
+
   useEffect(() => {
     if (!getToken() || invite) return;
     api("/api/me")
@@ -255,6 +264,11 @@ export default function App() {
                   setMode(key);
                 }}>
                 {label}
+                {key === "office" && readyCount > 0 && (
+                  <span className="tab-count" aria-label={`${readyCount} ready to be scheduled`}>
+                    {readyCount}
+                  </span>
+                )}
               </button>
             ))}
           </nav>

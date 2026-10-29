@@ -259,7 +259,7 @@ function EstimateDetail({ me, id, go, onBack, onEdit, onProposal }) {
             )}
             {["sent", "expired"].includes(e.status) && (
               <>
-                <NoteAction label="Mark won" prompt="Anything to note? (signed date, deposit…)" required={false} onSubmit={(n) => setStatus("won", n)} />
+                <NoteAction label="Mark won" prompt="Anything to note? (signed date, deposit…) Next you'll make it a job." required={false} onSubmit={(n) => setStatus("won", n)} />
                 <NoteAction label="Log a follow-up" prompt="Who did you talk to and what did they say?" placeholder="Called Dana, board votes on the 15th" onSubmit={(n) => act(() => api(`/api/estimates/${id}/follow-up`, { method: "POST", body: { note: n } }))} />
                 <NoteAction label="Re-send" prompt="What changed? (restarts the 30-day clock)" required={false} onSubmit={(n) => setStatus("sent", n)} />
                 <NoteAction label="Mark lost" tone="danger" prompt="Why did we lose it? (price, timing, went with someone else…)" onSubmit={(n) => setStatus("lost", n)} />

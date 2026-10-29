@@ -34,8 +34,33 @@ def _check_salesperson(db: Session, user: User, person_id: str | None) -> None:
         raise HTTPException(422, "That salesperson isn't on the team")
 
 
-def lead_out(lead: Lead) -> dict:
+def outcome(lead: Lead, statuses: list[str]) -> str:
+    """Where the lead stands, following its estimates: won if any estimate
+    was won, lost / no bid once every estimate was turned down, expired if
+    they ran out, otherwise its own stage (new, being estimated, sent)."""
+    if lead.status == LeadStatus.dropped:
+        return "dropped"
+    s = set(statuses)
+    if "won" in s:
+        return "won"
+    if s and s <= {"lost", "no_bid"}:
+        return "lost" if "lost" in s else "no_bid"
+    if s and s <= {"lost", "no_bid", "expired"}:
+        return "expired"
+    return lead.status.value
+
+
+def _estimate_statuses(db: Session, company_id: str, lead_ids: list[str]) -> dict[str, list[str]]:
+    rows = db.execute(select(Estimate.lead_id, Estimate.status).where(Estimate.company_id == company_id, Estimate.lead_id.in_(lead_ids)))
+    out: dict[str, list[str]] = {}
+    for lid, st in rows:
+        out.setdefault(lid, []).append(st.value)
+    return out
+
+
+def lead_out(lead: Lead, statuses: list[str] | None = None) -> dict:
     return {
+        "outcome": outcome(lead, statuses or []),
         "id": lead.id, "client_id": lead.client_id, "client_name": lead.client.name, "name": lead.name,
         "site_address": lead.site_address, "parcel_id": lead.parcel_id,
         "court_type": lead.court_type.value if lead.court_type else None,
@@ -58,7 +83,11 @@ def list_leads(status: LeadStatus | None = None, user: User = Depends(sales_side
          .options(selectinload(Lead.client), selectinload(Lead.salesperson)).order_by(Lead.created_at.desc()))
     if status:
         q = q.where(Lead.status == status)
-    return [lead_out(l) for l in db.scalars(q) if _mine(l, user)]
+    leads = [l for l in db.scalars(q) if _mine(l, user)]
+    from .estimates import refresh_expiry
+    refresh_expiry(db, list(db.scalars(select(Estimate).where(Estimate.company_id == user.company_id, Estimate.lead_id.is_not(None)))))
+    st = _estimate_statuses(db, user.company_id, [l.id for l in leads])
+    return [lead_out(l, st.get(l.id)) for l in leads]
 
 
 @router.post("", status_code=201)
@@ -80,8 +109,10 @@ def add_lead(body: LeadIn, user: User = Depends(sales_side), db: Session = Depen
 def get_lead(lead_id: str, user: User = Depends(sales_side), db: Session = Depends(get_db)):
     lead = load_lead(db, user, lead_id)
     from .estimates import estimate_row
-    ests = db.scalars(select(Estimate).where(Estimate.lead_id == lead.id, Estimate.company_id == user.company_id).order_by(Estimate.created_at))
-    return lead_out(lead) | {
+    ests = list(db.scalars(select(Estimate).where(Estimate.lead_id == lead.id, Estimate.company_id == user.company_id).order_by(Estimate.created_at)))
+    from .estimates import refresh_expiry
+    refresh_expiry(db, ests)
+    return lead_out(lead, [e.status.value for e in ests]) | {
         "estimates": [estimate_row(db, e, user) for e in ests if user.role != Role.sales or e.salesperson_id == user.id],
         "activity": history(db, user.company_id, "lead", lead.id),
     }
