@@ -27,15 +27,17 @@ function LeadList({ me, onOpen, onNew }) {
   if (error && !data) return <p className="empty">Couldn't load leads: {error}</p>;
   if (!data) return <p className="empty">Loading leads…</p>;
   const groups = {
-    open: (l) => ["new", "estimating"].includes(l.status),
-    estimated: (l) => l.status === "estimated",
-    dropped: (l) => l.status === "dropped",
+    open: (l) => ["new", "estimating"].includes(l.outcome),
+    estimated: (l) => ["estimated", "expired"].includes(l.outcome),
+    won: (l) => l.outcome === "won",
+    lost: (l) => ["lost", "no_bid", "dropped"].includes(l.outcome),
     all: () => true,
   };
   const filters = [
     ["open", "Open"],
     ["estimated", "Estimate sent"],
-    ["dropped", "Dropped"],
+    ["won", "Won"],
+    ["lost", "Lost / dropped"],
     ["all", "All"],
   ];
   const shown = data.filter(groups[filter]);
@@ -70,7 +72,7 @@ function LeadList({ me, onOpen, onNew }) {
               <button className="jobrow" onClick={() => onOpen(l.id)}>
                 <span className="jobrow-head">
                   <span className="jobrow-name">{l.name}</span>
-                  <StatusChip status={l.status} label={LEAD_STATUS[l.status]} />
+                  <StatusChip status={l.outcome} label={LEAD_STATUS[l.outcome]} />
                 </span>
                 <span className="jobrow-foot">
                   <span>{l.client_name}</span>
@@ -101,7 +103,7 @@ function LeadDetail({ me, id, go, onBack, onEdit }) {
       <div className="detail-head">
         <div>
           <p className="eyebrow">
-            Lead · <StatusChip status={l.status} label={LEAD_STATUS[l.status]} />
+            Lead · <StatusChip status={l.outcome} label={LEAD_STATUS[l.outcome]} />
           </p>
           <h2 className="detail-title">{l.name}</h2>
           <p className="detail-sub">
@@ -117,7 +119,7 @@ function LeadDetail({ me, id, go, onBack, onEdit }) {
       <section className="panel">
         <h3>What's next</h3>
         <div className="action-row">
-          {me.estimates && l.status !== "dropped" && (
+          {me.estimates && l.status !== "dropped" && l.outcome !== "won" && (
             <button className="btn" onClick={() => go("estimates", { view: "edit", leadId: l.id })}>
               {l.estimates.length ? "Start another estimate" : "Start the estimate"}
             </button>
@@ -135,7 +137,7 @@ function LeadDetail({ me, id, go, onBack, onEdit }) {
       </section>
 
       <section className="panel">
-        <h3>What they want</h3>
+        <h3>Details</h3>
         <dl className="facts">
           <div>
             <dt>Site</dt>
@@ -286,7 +288,7 @@ function LeadForm({ me, leadId, clientId, onDone, onCancel }) {
       </section>
 
       <section className="panel">
-        <h3>What they want</h3>
+        <h3>Details</h3>
         <div className="grid">
           <label className="span-2">
             Project name

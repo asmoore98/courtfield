@@ -199,3 +199,19 @@ def test_proposal_header_settings(client):
     e = new_estimate(client, c["id"])
     assert e["valid_days"] == 45
     assert client.get(f"/api/estimates/{e['id']}/proposal", headers=auth(GM)).json()["company"]["name"] == "Armor Courts (test)"
+
+
+def test_lead_follows_its_estimates(client):
+    c = new_client(client)
+    lead = client.post("/api/leads", json={"client_id": c["id"], "name": "TEST Lead outcome"}, headers=auth(SALES)).json()
+    assert lead["outcome"] == "new"
+    e = new_estimate(client, c["id"], lead_id=lead["id"], salesperson_id=me_id(client, SALES))
+    assert client.get(f"/api/leads/{lead['id']}", headers=auth(SALES)).json()["outcome"] == "estimating"
+    client.post(f"/api/estimates/{e['id']}/status", json={"status": "sent"}, headers=auth(SALES))
+    assert client.get(f"/api/leads/{lead['id']}", headers=auth(SALES)).json()["outcome"] == "estimated"
+    client.post(f"/api/estimates/{e['id']}/status", json={"status": "lost", "note": "Price"}, headers=auth(SALES))
+    row = next(l for l in client.get("/api/leads", headers=auth(SALES)).json() if l["id"] == lead["id"])
+    assert row["outcome"] == "lost"
+    client.post(f"/api/estimates/{e['id']}/status", json={"status": "won", "note": "They came back"}, headers=auth(SALES))
+    detail = client.get(f"/api/leads/{lead['id']}", headers=auth(SALES)).json()
+    assert detail["outcome"] == "won" and detail["activity"][0]["action"] == f"Estimate {e['number']} marked won"

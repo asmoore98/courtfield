@@ -506,7 +506,7 @@ export function ScopeEditor({
           <div className="grid">
             <label className="span-2">
               Street address
-              <input value={job.address} onChange={(e) => set("address", e.target.value)} placeholder="Street, city, ZIP" autoComplete="off" />
+              <input value={job.address} onChange={(e) => set("address", e.target.value)} placeholder="Street, city, ZIP" autoComplete="street-address" />
             </label>
             <label className="span-2">
               <span>

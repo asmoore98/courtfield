@@ -6,6 +6,23 @@ To undo a whole batch after it's merged: open its pull request on GitHub and cli
 
 ---
 
+## v0.4.1 — Batch 2 fixes
+
+**Date:** October 29, 2026 · **Branch:** `drew/batch2-fixes` · **By:** Drew Moore
+
+| Change | Why | Where |
+|---|---|---|
+| **Jobs tab: "Jobs ready to be scheduled"** box at the top lists every won estimate that isn't a job yet, each with a Create job button. The Jobs tab also shows a green count of how many are waiting | A won job can't get forgotten because it wasn't clear it was ready | `OfficeView.jsx`, `App.jsx` |
+| **Leads follow their estimates:** a lead now shows Won, Lost, No bid or Estimate expired once its estimate does. Leads list filters: Open, Estimate sent, Won, Lost / dropped, All. Each estimate status change is written to the lead's history too | See the result right on the lead | `routers/leads.py`, `routers/estimates.py`, `LeadsView.jsx` |
+| Lead section renamed "Details" (was "What they want") | Clearer | `LeadsView.jsx`, `routers/leads.py` |
+| Note: the "Details" rename and the won-estimates box were meant to go out with Batch 2 but missed that push; they're in this one | | |
+
+No database change.
+
+**How to undo:** revert this pull request on GitHub.
+
+---
+
 ## v0.4.0 — Batch 2: Leads, estimates, clients, proposals
 
 **Date:** October 29, 2026 · **Branch:** `drew/batch2-estimates-clients` · **By:** Drew Moore
@@ -17,7 +34,7 @@ The flow is now **Lead → Estimate → Job**. Sales brings in a lead, an estima
 | Change | Why | Where |
 |---|---|---|
 | **Clients** tab: name, contact, phone, email, billing address, notes, plans & documents links. Each client shows its leads, estimates and jobs. Clients are never deleted; the GM can turn one off | One place per customer, tied to everything done for them | `ClientsView.jsx`, `routers/clients.py` |
-| **Leads** tab: client (pick a returning one or "+ New client"), project, site address, parcel, court type/scope if known, description, Google Drive links, bid due date, salesperson. A lead's "Details" section holds the description. Statuses New → Being estimated → Estimate sent, or Dropped (with a reason). "Start the estimate" opens an estimate filled in from the lead | Sales hands the estimator everything in one place | `LeadsView.jsx`, `routers/leads.py` |
+| **Leads** tab: client (pick a returning one or "+ New client"), project, site address, parcel, court type/scope if known, description, Google Drive links, bid due date, salesperson. Statuses New → Being estimated → Estimate sent, or Dropped (with a reason). "Start the estimate" opens an estimate filled in from the lead | Sales hands the estimator everything in one place | `LeadsView.jsx`, `routers/leads.py` |
 | **Estimates** tab: numbered E-2026-001…; statuses Draft, Sent, Won, Lost, No bid, Expired; filter by status | Estimates are separate from jobs, so lost bids don't clutter the job list and are kept to learn from | `EstimatesView.jsx`, `routers/estimates.py` |
 | **Locked versions:** every save makes the next version (v1, v2…). Old versions can't be changed; pick any version from the dropdown to see it. Only the GM can remove a version, with a reason, and it stays on record as removed | A trail of every change | same |
 | **History** on every client, lead and estimate: who did what, when, and why | People can be sneaky; this keeps a trail | `app/activity.py`, `Activity` table |
@@ -25,7 +42,6 @@ The flow is now **Lead → Estimate → Job**. Sales brings in a lead, an estima
 | Lost and No bid require a reason | Learn what we're high on or missing | same |
 | **Printable proposal:** company header, client, project, scope of work, work included, not included, price, terms, signature lines. "Print / Save as PDF". Never shows costs, markups, margins or internal notes, whoever opens it | Something to send the client | `ProposalView.jsx` |
 | **Create job from a won estimate:** site, tasks, hours and cost lines carry over; the job is linked to the client | No retyping | `routers/estimates.py`, `routers/jobs.py` |
-| **Jobs tab shows "Won, ready to become jobs"** at the top: every won estimate without a job yet, each with a Create job button | Marking an estimate won didn't put anything on the Jobs tab | `OfficeView.jsx` |
 | **Settings** tab (GM): proposal header (name, address, phone, email, license, logo link), standard terms, default days an estimate is good for | Placeholder until the real letterhead is known | `SettingsView.jsx`, `routers/reports.py` |
 | **New roles: Sales and PM.** Sales: leads, clients, their own estimates' status and price, proposals, follow-ups; never costs or margins, never other salespeople's leads/estimates. PM: same as estimator for now | Sales enters leads; roles get tightened later | `models.py`, `auth.py`, `TeamView.jsx` |
 | Only the GM can start a job without an estimate ("New job without an estimate" on Jobs). Estimators and PMs make jobs from won estimates | Jobs come from estimates | `routers/jobs.py`, `OfficeView.jsx` |
