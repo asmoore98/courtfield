@@ -86,7 +86,8 @@ class CostLineOut(ORM):
 class JobIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     client: str = ""
-    address: str = ""
+    address: str = Field(default="", max_length=300)
+    parcel_id: str = Field(default="", max_length=60)
     lat: float | None = Field(default=None, ge=-90, le=90)
     lng: float | None = Field(default=None, ge=-180, le=180)
     court_type: CourtType
@@ -121,6 +122,7 @@ class JobOut(ORM):
     name: str
     client: str
     address: str
+    parcel_id: str = ""
     lat: float | None
     lng: float | None
     court_type: CourtType

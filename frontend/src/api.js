@@ -92,6 +92,14 @@ export function safeGet(key, fallback = null) {
   }
 }
 
+// Unsaved forms kept on this device. Cleared on sign-out so the next person
+// to use the phone doesn't see them.
+export function clearDrafts() {
+  try {
+    for (const k of Object.keys(localStorage)) if (k.startsWith("cf.draft.") || k === "cf.office.screen") localStorage.removeItem(k);
+  } catch {}
+}
+
 export function safeSet(key, value) {
   try {
     if (value === null) localStorage.removeItem(key);

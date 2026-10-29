@@ -238,7 +238,7 @@ const SAME = ["job_id", "task_id", "worker_id", "clock_in", "clock_out", "in_lat
 const norm = (k, v) => (v == null ? null : ["clock_in", "clock_out"].includes(k) ? Date.parse(v) : v);
 
 function jobFields(body) {
-  const pick = ["name", "client", "address", "lat", "lng", "court_type", "scope_type", "contract_amount", "estimated_labor_rate", "sales_tax_pct"];
+  const pick = ["name", "client", "address", "parcel_id", "lat", "lng", "court_type", "scope_type", "contract_amount", "estimated_labor_rate", "sales_tax_pct"];
   need(typeof body.name === "string" && body.name.trim(), 422, "Job name is required");
   return Object.fromEntries(pick.map((k) => [k, body[k] ?? (["lat", "lng"].includes(k) ? null : k.endsWith("amount") || k.endsWith("rate") || k.endsWith("pct") ? 0 : "")]));
 }

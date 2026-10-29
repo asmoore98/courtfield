@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { DEMO, api, clearToken, getToken, onSignedOut, safeGet, safeSet, setToken } from "./api";
+import { DEMO, api, clearDrafts, clearToken, getToken, onSignedOut, safeGet, safeSet, setToken } from "./api";
 import FieldView from "./FieldView";
 import OfficeView from "./OfficeView";
 import TeamView from "./TeamView";
@@ -179,6 +179,7 @@ export default function App() {
 
   function signOut() {
     clearToken();
+    clearDrafts();
     safeSet(ME_KEY, null);
     setMe(null);
     setMode(null);
