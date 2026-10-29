@@ -96,7 +96,7 @@ export function safeGet(key, fallback = null) {
 // to use the phone doesn't see them.
 export function clearDrafts() {
   try {
-    for (const k of Object.keys(localStorage)) if (k.startsWith("cf.draft.") || k === "cf.office.screen") localStorage.removeItem(k);
+    for (const k of Object.keys(localStorage)) if (k.startsWith("cf.draft.") || /^cf\.\w+\.screen$/.test(k)) localStorage.removeItem(k);
   } catch {}
 }
 

@@ -202,7 +202,7 @@ def test_travel_between_jobs_and_unclocked_gap(client):
 def test_crew_lead_sets_missing_site_pin(client):
     body = {"name": "No pin yet", "court_type": "tennis", "scope_type": "repair", "estimated_labor_rate": 30,
             "tasks": [{"task_type": "prep", "name": "Prep", "estimated_hours": 4}]}
-    job = client.post("/api/jobs", json=body, headers=auth(EST)).json()
+    job = client.post("/api/jobs", json=body, headers=auth(GM)).json()
     assert job["lat"] is None
     r = client.post(f"/api/jobs/{job['id']}/site", json={"lat": 26.6, "lng": -80.1}, headers=auth(LEAD))
     assert r.status_code == 200 and r.json()["lat"] == 26.6

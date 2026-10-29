@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from ..auth import EDITS_JOBS, SEES_DOLLARS, current_user, require_roles
+from ..auth import CREATES_JOBS, EDITS_JOBS, SEES_DOLLARS, current_user, require_roles
 from ..costing import job_costing
 from ..materials import material_actual_cost
 from ..db import get_db
@@ -88,19 +88,28 @@ def list_jobs(status: JobStatus | None = None, user: User = Depends(current_user
 
 
 @router.post("", status_code=201, response_model=JobOut)
-def create_job(body: JobIn, user: User = Depends(require_roles(*EDITS_JOBS)), db: Session = Depends(get_db)):
+def create_job(body: JobIn, user: User = Depends(require_roles(*CREATES_JOBS)), db: Session = Depends(get_db)):
+    """A job with no estimate behind it (a callback, a small patch). GM only;
+    everything else starts as an estimate and becomes a job when it's won."""
+    job = build_job(db, user, body)
+    db.commit()
+    return JobOut.model_validate(load_job(db, user, job.id))
+
+
+def build_job(db: Session, user: User, body: JobIn, client_id: str | None = None) -> Job:
+    """Add a job with its tasks and cost lines. The caller commits."""
     data = body.model_dump(exclude={"tasks", "cost_lines"})
     if user.role != Role.gm:
         data["status"] = JobStatus.scheduled  # only the GM starts or closes jobs
-    job = Job(company_id=user.company_id, **data)
+    job = Job(company_id=user.company_id, client_id=client_id, **data)
     for i, t in enumerate(body.tasks):
         job.tasks.append(JobTask(company_id=user.company_id, sort_order=i, **t.model_dump(exclude={"id", "sort_order"})))
     db.add(job)
     db.flush()  # task ids for cost lines
     _check_items(db, body.cost_lines, user.company_id)
     _apply_cost_lines(job, body.cost_lines, list(job.tasks), user.company_id)
-    db.commit()
-    return JobOut.model_validate(load_job(db, user, job.id))
+    db.flush()
+    return job
 
 
 @router.get("/summary", response_model=list[JobCosting])

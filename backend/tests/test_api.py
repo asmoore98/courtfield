@@ -63,11 +63,12 @@ def test_owner_is_read_only(client):
     assert client.post("/api/jobs", json={}, headers=auth(OWNER)).status_code == 403
 
 
-def test_estimator_creates_job_crew_lead_cannot(client):
+def test_only_gm_starts_a_job_without_an_estimate(client):
     body = {"name": "Test Job", "court_type": "pickleball", "scope_type": "repair",
             "estimated_labor_rate": 30, "tasks": [{"task_type": "prep", "name": "Prep", "estimated_hours": 4}]}
-    assert client.post("/api/jobs", json=body, headers=auth(LEAD)).status_code == 403
-    r = client.post("/api/jobs", json=body, headers=auth(EST))
+    for token in (LEAD, EST, "dev-pm", "dev-sales"):
+        assert client.post("/api/jobs", json=body, headers=auth(token)).status_code == 403
+    r = client.post("/api/jobs", json=body, headers=auth(GM))
     assert r.status_code == 201 and r.json()["tasks"][0]["estimated_hours"] == 4
 
 
@@ -226,9 +227,8 @@ def test_edit_rejects_foreign_task_and_wrong_roles(client):
     assert client.put(f"/api/jobs/{a['id']}", json=body, headers=auth(OTHER)).status_code == 404
 
 
-def test_estimator_cannot_create_active_job(client):
+def test_gm_can_start_a_job_active(client):
     body = {"name": "X", "court_type": "tennis", "scope_type": "repair", "status": "active", "tasks": []}
-    assert client.post("/api/jobs", json=body, headers=auth(EST)).json()["status"] == "scheduled"
     assert client.post("/api/jobs", json=body, headers=auth(GM)).json()["status"] == "active"
 
 
@@ -327,7 +327,7 @@ def test_estimate_summary_with_cost_lines(client):
                 {"category": "equipment", "description": "Washer rental", "quantity": 2, "unit": "day", "unit_cost": 150, "task_index": 0},
                 {"category": "subcontractor", "description": "Lights", "quantity": 1, "unit": "job", "unit_cost": 2000},
             ]}
-    r = client.post("/api/jobs", json=body, headers=auth(EST))
+    r = client.post("/api/jobs", json=body, headers=auth(GM))
     assert r.status_code == 201, r.text
     job = r.json()
     assert [c["description"] for c in job["cost_lines"]] == ["Resurfacer", "Washer rental", "Lights"]

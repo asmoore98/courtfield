@@ -6,6 +6,10 @@ import TeamView from "./TeamView";
 import TimesheetView from "./TimesheetView";
 import MaterialsView from "./MaterialsView";
 import CrewsView from "./CrewsView";
+import LeadsView from "./LeadsView";
+import EstimatesView from "./EstimatesView";
+import ClientsView from "./ClientsView";
+import SettingsView from "./SettingsView";
 
 const ME_KEY = "cf.me";
 // Sample sign-ins: shown in the preview and in local development only.
@@ -15,6 +19,7 @@ const SAMPLE_ACCOUNTS = [
   ["gm@sample.test", "General manager"],
   ["owner@sample.test", "Owner"],
   ["estimator@sample.test", "Estimator"],
+  ...(DEMO ? [] : [["pm@sample.test", "Project manager"], ["sales@sample.test", "Sales"]]),
 ];
 const SHOW_SAMPLES = DEMO || import.meta.env.DEV;
 
@@ -169,6 +174,13 @@ export default function App() {
   const [me, setMe] = useState(() => (getToken() ? safeGet(ME_KEY) : null));
   const [mode, setMode] = useState(null);
   const [invite, setInvite] = useState(inviteToken);
+  // Jump to another tab and open something there, e.g. a lead's estimate.
+  const [nav, setNav] = useState({ mode: null, screen: null, n: 0 });
+  const go = (m, screen) => {
+    setMode(m);
+    setNav((x) => ({ mode: m, screen, n: x.n + 1 }));
+    window.scrollTo(0, 0);
+  };
 
   function signedIn(m) {
     safeSet(ME_KEY, m);
@@ -212,16 +224,23 @@ export default function App() {
   const canTeam = me.role === "gm";
   const canPayroll = me.role === "gm" || me.role === "owner";
   const canCrews = !DEMO && !!me.sees_locations;
-  const canMaterials = !DEMO && ["gm", "estimator", "owner", "warehouse"].includes(me.role);
+  const canMaterials = !DEMO && ["gm", "estimator", "pm", "owner", "warehouse"].includes(me.role);
+  const canSales = !DEMO && !!me.sales_side;
+  const canSettings = !DEMO && me.role === "gm";
   const views = [
     canField && ["field", "Field"],
     canOffice && ["office", "Jobs"],
+    canSales && ["leads", "Leads"],
+    canSales && ["estimates", "Estimates"],
+    canSales && ["clients", "Clients"],
     canCrews && ["crews", "Crews"],
     canMaterials && ["materials", "Materials"],
     canPayroll && ["timesheets", "Timesheets"],
     canTeam && ["team", "Team"],
+    canSettings && ["settings", "Settings"],
   ].filter(Boolean);
-  const view = mode ?? (canOffice ? "office" : canField ? "field" : "materials");
+  const view = mode ?? (canOffice ? "office" : canField ? "field" : canSales ? "leads" : "materials");
+  const navProps = (m) => (nav.mode === m ? { key: `${m}-${nav.n}`, initial: nav.screen } : { key: m });
 
   return (
     <div className="app">
@@ -231,7 +250,10 @@ export default function App() {
         {views.length > 1 && (
           <nav className="switch" aria-label="View">
             {views.map(([key, label]) => (
-              <button key={key} aria-pressed={view === key} onClick={() => setMode(key)}>
+              <button key={key} aria-pressed={view === key} onClick={() => {
+                  setNav((x) => ({ mode: null, screen: null, n: x.n }));
+                  setMode(key);
+                }}>
                 {label}
               </button>
             ))}
@@ -245,8 +267,16 @@ export default function App() {
         </span>
       </header>
       <main className="content">
-        {!canField && !canOffice && !canMaterials ? (
+        {!canField && !canOffice && !canMaterials && !canSales ? (
           <p className="empty">Your role doesn't have a screen yet.</p>
+        ) : view === "leads" && canSales ? (
+          <LeadsView me={me} go={go} {...navProps("leads")} />
+        ) : view === "estimates" && canSales ? (
+          <EstimatesView me={me} go={go} {...navProps("estimates")} />
+        ) : view === "clients" && canSales ? (
+          <ClientsView me={me} go={go} {...navProps("clients")} />
+        ) : view === "settings" && canSettings ? (
+          <SettingsView />
         ) : view === "crews" && canCrews ? (
           <CrewsView />
         ) : view === "materials" && canMaterials ? (
@@ -258,7 +288,7 @@ export default function App() {
         ) : view === "field" && canField ? (
           <FieldView me={me} />
         ) : (
-          <OfficeView me={me} />
+          <OfficeView me={me} {...navProps("office")} />
         )}
       </main>
     </div>

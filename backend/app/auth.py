@@ -26,23 +26,31 @@ from .models import DeviceSession, Invite, Role, User, utcnow
 _bearer = HTTPBearer(auto_error=False)
 
 # Who sees labor dollars (rates, cost, margin). Crew leads see hours only.
-SEES_DOLLARS = {Role.owner, Role.gm, Role.estimator}
+SEES_DOLLARS = {Role.owner, Role.gm, Role.estimator, Role.pm}
 # Who can enter field time.
 ENTERS_TIME = {Role.gm, Role.crew_lead}
-# Who can create and edit jobs and their estimated hours.
-EDITS_JOBS = {Role.gm, Role.estimator}
+# Who can edit jobs and their estimated hours. Starting a job without an
+# estimate is GM only (CREATES_JOBS); otherwise jobs come from won estimates.
+EDITS_JOBS = {Role.gm, Role.estimator, Role.pm}
+CREATES_JOBS = {Role.gm}
 # Who logs material in and out of the warehouse.
 MANAGES_STOCK = {Role.gm, Role.warehouse}
 # Who keeps the price list.
-EDITS_PRICES = {Role.gm, Role.estimator}
+EDITS_PRICES = {Role.gm, Role.estimator, Role.pm}
 # Who sees a job's material list (dollars only for SEES_DOLLARS).
-SEES_MATERIALS = {Role.owner, Role.gm, Role.estimator, Role.crew_lead, Role.warehouse}
+SEES_MATERIALS = {Role.owner, Role.gm, Role.estimator, Role.pm, Role.crew_lead, Role.warehouse}
 # Who sees where crews are (live map, daily travel report).
 SEES_LOCATIONS = {Role.owner, Role.gm}
 # Who manages people, rates and sign-ins.
 MANAGES_TEAM = {Role.gm}
+# Who builds estimates and sees what they cost us.
+ESTIMATES = {Role.gm, Role.estimator, Role.pm}
+# Who works leads, clients, and estimate status and proposals. Sales sees
+# proposal prices but never costs, markups or margins, and only their own
+# leads and estimates.
+SALES_SIDE = ESTIMATES | {Role.sales}
 # Roles that sign in. Plain crew members are clocked in by their crew lead.
-SIGNS_IN = {Role.owner, Role.gm, Role.estimator, Role.crew_lead, Role.warehouse}
+SIGNS_IN = {Role.owner, Role.gm, Role.estimator, Role.pm, Role.sales, Role.crew_lead, Role.warehouse}
 
 MIN_PASSWORD = 8
 
