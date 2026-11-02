@@ -151,10 +151,19 @@ function jobOut(j, user) {
   return out;
 }
 
+// Each task has its own cost rate (older tasks use the job's single rate); sub tasks are sub cost.
+const taskRate = (j, t) => t.cost_rate ?? j.estimated_labor_rate ?? 0;
+const taskCost = (j, t) => (t.kind === "sub" ? t.sub_price ?? 0 : t.estimated_hours * taskRate(j, t));
+const TASK_FIELDS = (t) => ({ task_type: t.task_type, name: t.name, kind: t.kind ?? "crew", estimated_hours: t.kind === "sub" ? 0 : t.estimated_hours ?? 0,
+  cost_rate: t.cost_rate ?? null, charge_rate: t.charge_rate ?? null, sub_id: t.sub_id ?? null, sub_price: t.sub_price ?? null,
+  sub_quote_link: t.sub_quote_link ?? "", template_id: t.template_id ?? null, unit: t.unit ?? "hr", quantity: t.quantity ?? null,
+  coats: t.coats ?? null, production_rate: t.production_rate ?? null, unit_price: t.unit_price ?? null });
+
 function estimateSummary(j) {
   const cat = { material: 0, equipment: 0, subcontractor: 0, other: 0 };
   for (const c of j.cost_lines ?? []) cat[c.category] += c.quantity * c.unit_cost;
-  const labor = j.tasks.reduce((s, t) => s + t.estimated_hours, 0) * j.estimated_labor_rate;
+  const labor = j.tasks.filter((t) => t.kind !== "sub").reduce((s, t) => s + taskCost(j, t), 0);
+  cat.subcontractor += j.tasks.filter((t) => t.kind === "sub").reduce((s, t) => s + taskCost(j, t), 0);
   const tax = (cat.material * (j.sales_tax_pct ?? 0)) / 100;
   const total = labor + cat.material + tax + cat.equipment + cat.subcontractor + cat.other;
   const contract = j.contract_amount ?? 0;
@@ -171,7 +180,8 @@ function applyLines(j, lines, tasksInOrder) {
     need(l.task_index == null || l.task_index < tasksInOrder.length, 422, `Cost line ${i + 1} points at a task that isn't in the job`);
     need((l.description ?? "").trim(), 422, "Every cost line needs a description");
     return { id: l.id ?? uid(), category: l.category ?? "material", description: l.description.trim(), quantity: Number(l.quantity) || 0,
-      unit: (l.unit ?? "").trim(), unit_cost: Number(l.unit_cost) || 0, task_id: l.task_index == null ? null : tasksInOrder[l.task_index].id, sort_order: i };
+      unit: (l.unit ?? "").trim(), unit_cost: Number(l.unit_cost) || 0, task_id: l.task_index == null ? null : tasksInOrder[l.task_index].id, sort_order: i,
+      in_house: !!l.in_house };
   });
 }
 
@@ -188,9 +198,9 @@ function costing(j, withDollars) {
   const tasks = [...j.tasks].sort((a, b) => a.sort_order - b.sort_order).map((t) => {
     const a = closed[t.id] ?? 0, o = open[t.id] ?? 0;
     const used = t.estimated_hours > 0 ? (a + o) / t.estimated_hours : null;
-    const row = { task_id: t.id, name: t.name, task_type: t.task_type, estimated_hours: t.estimated_hours,
+    const row = { task_id: t.id, name: t.name, task_type: t.task_type, kind: t.kind ?? "crew", estimated_hours: t.estimated_hours,
       actual_hours: r2(a), open_hours: r2(o), hours_used_pct: used == null ? null : Math.round(used * 1e4) / 1e4, status: tone(used) };
-    if (withDollars) { row.estimated_labor_cost = r2(t.estimated_hours * j.estimated_labor_rate); row.actual_labor_cost = r2(cost[t.id] ?? 0); }
+    if (withDollars) { row.estimated_labor_cost = t.kind === "sub" ? 0 : r2(taskCost(j, t)); row.actual_labor_cost = r2(cost[t.id] ?? 0); }
     return row;
   });
   const est = j.tasks.reduce((s, t) => s + t.estimated_hours, 0);
@@ -199,7 +209,7 @@ function costing(j, withDollars) {
   const out = { job_id: j.id, job_name: j.name, status: j.status, estimated_hours: r2(est), actual_hours: r2(act), open_hours: r2(opn),
     hours_used_pct: est > 0 ? Math.round(((act + opn) / est) * 1e4) / 1e4 : null, crew_on_site: onSite.size, tasks };
   if (withDollars) {
-    const ec = r2(est * j.estimated_labor_rate), ac = r2(Object.values(cost).reduce((s, v) => s + v, 0));
+    const ec = r2(j.tasks.filter((t) => t.kind !== "sub").reduce((s, t) => s + taskCost(j, t), 0)), ac = r2(Object.values(cost).reduce((s, v) => s + v, 0));
     Object.assign(out, { contract_amount: j.contract_amount, estimated_labor_cost: ec, actual_labor_cost: ac,
       labor_cost_used_pct: ec > 0 ? Math.round((ac / ec) * 1e4) / 1e4 : null,
       labor_variance: j.status === "complete" ? r2(ac - ec) : null, estimate: estimateSummary(j) });
@@ -278,7 +288,7 @@ function route(method, path, query, body, user) {
   if (method === "POST" && path === "/api/jobs") {
     need(EDITS_JOBS.includes(user.role), 403, "Your role can't do that");
     const j = { id: uid(), ...jobFields(body), status: user.role === "gm" ? body.status ?? "scheduled" : "scheduled", created_at: Date.now(),
-      tasks: (body.tasks ?? []).map((t, i) => ({ id: uid(), task_type: t.task_type, name: t.name, estimated_hours: t.estimated_hours ?? 0, sort_order: i })),
+      tasks: (body.tasks ?? []).map((t, i) => ({ id: uid(), ...TASK_FIELDS(t), sort_order: i })),
       cost_lines: [] };
     applyLines(j, body.cost_lines ?? [], j.tasks);
     db.jobs.push(j);
@@ -315,7 +325,7 @@ function route(method, path, query, body, user) {
       const blocked = removed.filter((t) => used.has(t.id)).map((t) => t.name).sort();
       need(!blocked.length, 409, `Crew time is logged on ${blocked.join(", ")}, so it can't be removed. Set its hours instead.`);
       Object.assign(j, jobFields(body));
-      j.tasks = body.tasks.map((t, i) => ({ id: t.id ?? uid(), task_type: t.task_type, name: t.name, estimated_hours: t.estimated_hours ?? 0, sort_order: i }));
+      j.tasks = body.tasks.map((t, i) => ({ id: t.id ?? uid(), ...TASK_FIELDS(t), sort_order: i }));
       const live = new Set(j.tasks.map((t) => t.id));
       for (const c of j.cost_lines ?? []) if (c.task_id && !live.has(c.task_id)) c.task_id = null;
       applyLines(j, body.cost_lines, j.tasks);

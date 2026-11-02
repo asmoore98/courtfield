@@ -3,15 +3,18 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ClientPicker, saveClient } from "./ClientPicker";
-import { EstimateTable, ScopeEditor, blankJob, formFrom, money2, num, starterTasks } from "./JobEditor";
+import { EstimateTable, PriceTable, ScopeEditor, blankJob, estimateOf, formFrom, money2, num, starterTasks, taskFromLibrary } from "./JobEditor";
+import { ChecklistSummary, blankCourt, courtBody, courtForm, tasksFromChecklist } from "./Checklist";
+import { UNIT_SHORT, courtAreas, fmt, rateText } from "./qty";
+import { useLibrary } from "./library";
 import {
   ActivityList, COURT_LABEL, ESTIMATE_STATUS, LinkList, LinksField, NoteAction, SCOPE_LABEL, StatusChip, fmtDate, fmtWhen, money0, useApi, useScreen,
 } from "./bits";
 import ProposalView from "./ProposalView";
 
 const SCREEN_KEY = "cf.estimates.screen";
-const CAT_LABEL = { material: "Material", equipment: "Rental", subcontractor: "Sub", other: "Other" };
-const asEst = (t) => t && { ...t, contract: t.price };
+const CAT_LABEL = { material: "Material", equipment: "Equipment", subcontractor: "Sub", other: "Other" };
+const asEst = (t) => t && { ...t, contract: t.price, charge: t.charge ?? {}, built_price: t.built_price ?? 0, adjustment: t.adjustment ?? 0 };
 
 export default function EstimatesView({ me, go, initial }) {
   // An open estimate form is remembered across tab switches; its unsaved work
@@ -24,6 +27,7 @@ export default function EstimatesView({ me, go, initial }) {
     return (
       <EstimateEditor
         me={me}
+        go={go}
         estimateId={screen.id}
         leadId={screen.leadId}
         onDone={(id) => open(id)}
@@ -343,6 +347,8 @@ function EstimateDetail({ me, id, go, onBack, onEdit, onProposal }) {
 
 function VersionSummary({ d, t }) {
   const lines = d.cost_lines ?? [];
+  const lib = useLibrary();
+  const subName = (id) => lib?.subs.find((s) => s.id === id)?.name;
   return (
     <div className="version-summary">
       <dl className="facts">
@@ -356,21 +362,58 @@ function VersionSummary({ d, t }) {
             {COURT_LABEL[d.court_type]}, {SCOPE_LABEL[d.scope_type].toLowerCase()}
           </dd>
         </div>
-        <div>
-          <dt>Labor rate</dt>
-          <dd>{money2(d.estimated_labor_rate)}/hr</dd>
-        </div>
+        {courtAreas(d.court)?.surface != null && (
+          <div>
+            <dt>Court size</dt>
+            <dd>
+              {fmt(courtAreas(d.court).surface, 0)} SF surface
+              <span className="sub">
+                {d.court.courts ? `${d.court.courts} court${d.court.courts > 1 ? "s" : ""}` : ""}
+                {courtAreas(d.court).paint !== courtAreas(d.court).surface ? ` · ${fmt(courtAreas(d.court).paint, 0)} SF paintable` : ""}
+              </span>
+            </dd>
+          </div>
+        )}
+        {d.priced !== "built" && (
+          <div>
+            <dt>Labor rate</dt>
+            <dd>{money2(d.estimated_labor_rate)}/hr</dd>
+          </div>
+        )}
       </dl>
       <div className="est-layout">
-        <EstimateTable est={asEst(t)} taxPct={d.sales_tax_pct} priceLabel="Proposal price" />
+        {d.priced === "built" ? (
+          <PriceTable est={asEst(t)} taxPct={d.sales_tax_pct} markups={d.markups} adjustmentReason={d.adjustment_reason} />
+        ) : (
+          <EstimateTable est={asEst(t)} taxPct={d.sales_tax_pct} priceLabel="Proposal price" />
+        )}
         <div className="est-lines">
           <h4>Tasks</h4>
           <table className="lines-table">
             <tbody>
               {d.tasks.map((x, i) => (
                 <tr key={i}>
-                  <th scope="row">{x.name}</th>
-                  <td className="num">{x.estimated_hours} h</td>
+                  <th scope="row">
+                    {x.name}
+                    <span className="sub">
+                      {x.kind === "sub"
+                        ? `Sub${subName(x.sub_id) ? `: ${subName(x.sub_id)}` : ""}`
+                        : [
+                            x.unit && x.unit !== "hr" && x.quantity != null
+                              ? `${fmt(x.quantity)} ${UNIT_SHORT[x.unit]}${x.unit === "sf_coat" && x.coats ? ` × ${x.coats} coats` : ""}${x.production_rate ? ` at ${rateText(x.unit, x.production_rate)}` : ""}`
+                              : "",
+                            x.cost_rate != null ? `${money2(x.cost_rate)}/hr cost` : "",
+                            x.unit && x.unit !== "hr" && x.unit_price != null
+                              ? `${money2(x.unit_price)}/${UNIT_SHORT[x.unit]}`
+                              : x.charge_rate != null
+                                ? `${money2(x.charge_rate)}/hr charge`
+                                : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                    </span>
+                  </th>
+                  <td className="num">{x.kind === "sub" ? money2(x.sub_price ?? 0) : `${x.estimated_hours} h`}</td>
                 </tr>
               ))}
             </tbody>
@@ -385,7 +428,7 @@ function VersionSummary({ d, t }) {
                       <th scope="row">
                         {l.description}
                         <span className="sub">
-                          {CAT_LABEL[l.category]}
+                          {l.category === "equipment" && l.in_house ? "In-house equipment" : CAT_LABEL[l.category]}
                           {l.task_index != null && d.tasks[l.task_index] ? ` · ${d.tasks[l.task_index].name}` : ""}
                         </span>
                       </th>
@@ -431,8 +474,14 @@ function VersionSummary({ d, t }) {
 
 // ---------- the estimate form ----------
 
-const blankEstimate = (extra = {}) => ({
-  ...blankJob(),
+const blankEstimate = (lib, extra = {}) => ({
+  ...blankJob(lib),
+  court: blankCourt(),
+  priced: "built",
+  markups: null, // filled from the company defaults when the library loads
+  overall_markup: "",
+  adjustment: "",
+  adjustment_reason: "",
   client_id: "",
   new_client: null,
   salesperson_id: "",
@@ -445,24 +494,29 @@ const blankEstimate = (extra = {}) => ({
   ...extra,
 });
 
-function EstimateEditor({ me, estimateId, leadId, onDone, onCancel }) {
+function EstimateEditor({ me, go, estimateId, leadId, onDone, onCancel }) {
   const [ctx, setCtx] = useState(null); // { estimate?, lead?, people }
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    Promise.all([
-      estimateId ? api(`/api/estimates/${estimateId}`) : null,
-      leadId ? api(`/api/leads/${leadId}`) : null,
-      api("/api/estimates/people").catch(() => []),
-    ])
-      .then(([estimate, lead, people]) => setCtx({ estimate, lead, people }))
-      .catch((e) => setError(e.message));
+    (async () => {
+      const [estimate, people, lists] = await Promise.all([
+        estimateId ? api(`/api/estimates/${estimateId}`) : null,
+        api("/api/estimates/people").catch(() => []),
+        api("/api/leads/checklists").catch(() => null),
+      ]);
+      // the lead this comes from, for its site checklist (sales may have added to it since)
+      const lid = leadId ?? estimate?.lead_id;
+      const lead = lid ? await api(`/api/leads/${lid}`).catch(() => null) : null;
+      setCtx({ estimate, lead, people, lists });
+    })().catch((e) => setError(e.message));
   }, [estimateId, leadId]);
 
   if (error) return <p className="empty">Couldn't open the estimate: {error}</p>;
   if (!ctx) return <p className="empty">Loading…</p>;
 
-  const { estimate: e, lead, people } = ctx;
+  const { estimate: e, lead, people, lists } = ctx;
+  const sections = lead && lists ? lists.scopes[lead.scope_type] ?? [] : [];
   const nextV = e ? Math.max(...e.versions.map((v) => v.version)) + 1 : 1;
   const fromLead = lead
     ? {
@@ -475,9 +529,16 @@ function EstimateEditor({ me, estimateId, leadId, onDone, onCancel }) {
         links: lead.links,
         notes: lead.description ? `From the lead: ${lead.description}` : "",
         salesperson_id: lead.salesperson_id ?? "",
+        court: courtForm(lead.survey?.court),
       }
     : {};
-  const loaded = e && {
+  // The lead's checklist trims and fills the starter list: cracks → crack fill
+  // with the footage, nets "no" → no net task.
+  const starter = (court, scope, lib) => {
+    const tasks = starterTasks(court, scope, lib);
+    return lead && !e ? tasksFromChecklist(tasks, sections, lead.survey, (name) => taskFromLibrary(name, lib)) : tasks;
+  };
+  const loaded = e && carryOverPrice({
     ...formFrom({
       name: e.name,
       client: "",
@@ -490,6 +551,7 @@ function EstimateEditor({ me, estimateId, leadId, onDone, onCancel }) {
       contract_amount: e.data.price,
       estimated_labor_rate: e.data.estimated_labor_rate,
       sales_tax_pct: e.data.sales_tax_pct,
+      court: courtForm(e.data.court),
       tasks: e.data.tasks.map(({ id, ...t }) => t),
       cost_lines: e.data.cost_lines.map(({ id, ...c }) => c),
     }),
@@ -502,16 +564,39 @@ function EstimateEditor({ me, estimateId, leadId, onDone, onCancel }) {
     links: e.data.links,
     notes: e.data.notes,
     note: "",
-  };
+    priced: e.data.priced ?? "typed",
+    markups: e.data.markups ? Object.fromEntries(Object.entries(e.data.markups).map(([k, v]) => [k, String(v)])) : null,
+    overall_markup: e.data.overall_markup ? String(e.data.overall_markup) : "",
+    adjustment: e.data.adjustment ? String(e.data.adjustment) : "",
+    adjustment_reason: e.data.adjustment_reason ?? "",
+  });
 
   return (
     <ScopeEditor
+      me={me}
+      go={go}
+      pricing
       draftKey={`cf.draft.estimate.${estimateId ?? (leadId ? `lead-${leadId}` : "new")}`}
       load={e ? () => Promise.resolve(loaded) : undefined}
-      blank={() => {
-        const b = blankEstimate(fromLead);
-        return lead ? { ...b, tasks: starterTasks(b.court_type, b.scope_type) } : b; // starter tasks for the lead's court and scope
+      blank={(lib) => {
+        const b = blankEstimate(lib, fromLead);
+        return lead && !e ? { ...b, tasks: starter(b.court_type, b.scope_type, lib) } : b; // starter tasks for the lead's court, scope and checklist
       }}
+      starter={starter}
+      intro={() =>
+        lead && sections.length > 0 ? (
+          <section className="panel">
+            <div className="panel-head">
+              <h3>What sales found on site</h3>
+              <button type="button" className="link" onClick={() => go("leads", { view: "lead", id: lead.id })}>
+                Open the lead
+              </button>
+            </div>
+            <p className="help">From the site checklist on the lead. The court size and the tasks it points to are already filled in below.</p>
+            <ChecklistSummary lists={lists} scope={lead.scope_type} survey={lead.survey} />
+          </section>
+        ) : null
+      }
       title={e ? `Edit ${e.number}` : lead ? "New estimate from a lead" : "New estimate"}
       backLabel={e ? "Back to estimate" : "All estimates"}
       submitLabel={e ? `Save as v${nextV}` : "Save estimate (v1)"}
@@ -585,6 +670,8 @@ function EstimateEditor({ me, estimateId, leadId, onDone, onCancel }) {
       validate={(f) => {
         if (!f.client_id) return { message: "Choose a client at the top, or pick “+ New client”." };
         if (f.client_id === "__new" && !f.new_client?.name?.trim()) return { message: "Give the new client a name (at the top)." };
+        if (num(f.adjustment) !== 0 && (f.adjustment_reason ?? "").trim().length < 3)
+          return { message: "Say why the price was adjusted (in the Price section)." };
         return null;
       }}
       submit={async (f, body) => {
@@ -596,7 +683,13 @@ function EstimateEditor({ me, estimateId, leadId, onDone, onCancel }) {
           lng: body.lng,
           court_type: body.court_type,
           scope_type: body.scope_type,
-          price: body.contract_amount,
+          court: courtBody(f.court),
+          priced: "built",
+          price: 0, // worked out by the server from the rates and markups
+          markups: Object.fromEntries(Object.entries(f.markups ?? {}).map(([k, v]) => [k, num(v)])),
+          overall_markup: num(f.overall_markup),
+          adjustment: num(f.adjustment),
+          adjustment_reason: (f.adjustment_reason ?? "").trim(),
           estimated_labor_rate: body.estimated_labor_rate,
           sales_tax_pct: body.sales_tax_pct,
           tasks: body.tasks.map(({ id, ...t }) => t),
@@ -624,4 +717,21 @@ function EstimateEditor({ me, estimateId, leadId, onDone, onCancel }) {
       onCancel={onCancel}
     />
   );
+}
+
+// Estimates saved before per-task rates had their price typed in. When one is
+// opened for a new version, it switches to a built price and the difference
+// is kept as an adjustment, so the price doesn't move until someone changes it.
+function carryOverPrice(f) {
+  if (f.priced === "built") return f;
+  const built = estimateOf({ ...f, priced: "built", adjustment: 0, markups: f.markups ?? {} }).built_price;
+  const typed = num(f.contract_amount);
+  const diff = Math.round((typed - built) * 100) / 100;
+  return {
+    ...f,
+    priced: "built",
+    markups: f.markups ?? { material: "0", equipment: "0", subcontractor: "0", other: "0" },
+    adjustment: diff ? String(diff) : "",
+    adjustment_reason: diff ? "Price carried over from before per-task rates. Set the charge rates and markups, then clear this." : "",
+  };
 }

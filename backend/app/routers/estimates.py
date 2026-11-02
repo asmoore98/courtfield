@@ -20,13 +20,14 @@ from sqlalchemy.orm import Session, selectinload
 from ..activity import history, iso, log, log_system
 from ..auth import ESTIMATES, SALES_SIDE, require_roles
 from ..db import get_db
+from ..quantities import labor_charge
 from ..models import (
-    Client, Company, Estimate, EstimateStatus, EstimateVersion, Job, Lead, LeadStatus, Role, StockItem, User, utcnow,
+    Client, Company, Estimate, EstimateStatus, EstimateVersion, Job, Lead, LeadStatus, Role, StockItem, TaskKind, User, utcnow,
 )
 from ..sales_schemas import EstimateData, EstimateIn, EstimateStatusIn, NoteIn, VoidIn
 from ..schemas import JobIn
 from .clients import load_client
-from .jobs import build_job
+from .jobs import build_job, check_task_refs
 
 router = APIRouter(prefix="/api/estimates", tags=["estimates"])
 sales_side = require_roles(*SALES_SIDE)
@@ -40,18 +41,58 @@ SALESPEOPLE_ROLES = (Role.sales, Role.gm, Role.pm, Role.estimator)
 # ---------- money ----------
 
 def totals(d: EstimateData) -> dict:
-    """What the work costs us, by kind, and the margin against the price.
-    Mirrors estimateOf() on the front end."""
-    hours = sum(t.estimated_hours for t in d.tasks)
-    labor = hours * d.estimated_labor_rate
+    """What the work costs us and what we charge, by kind, and the margin.
+    Mirrors estimateOf() on the front end.
+
+    Cost: crew hours x each task's cost rate (or the old single rate), sub
+    prices, and cost lines, plus sales tax on materials.
+    Charge (built pricing): crew work at its price per unit, or hours x
+    charge rate; every line and sub plus
+    its own markup (or the default for its kind; materials are marked up with
+    their tax); then the markup on the whole job; then the adjustment.
+    """
+    crew = [t for t in d.tasks if t.kind == TaskKind.crew]
+    subs = [t for t in d.tasks if t.kind == TaskKind.sub]
+    hours = sum(t.estimated_hours for t in crew)
+    labor = sum(t.estimated_hours * (t.cost_rate if t.cost_rate is not None else d.estimated_labor_rate) for t in crew)
     cat = {"material": 0.0, "equipment": 0.0, "subcontractor": 0.0, "other": 0.0}
+    charge = {"labor": sum(labor_charge(t) for t in crew),
+              "material": 0.0, "equipment": 0.0, "subcontractor": 0.0, "other": 0.0}
+    tax = 0.0
     for ln in d.cost_lines:
-        cat[ln.category.value] += ln.quantity * ln.unit_cost
-    tax = cat["material"] * d.sales_tax_pct / 100
+        k = ln.category.value
+        cost = ln.quantity * ln.unit_cost
+        line_tax = cost * d.sales_tax_pct / 100 if k == "material" else 0.0
+        m = ln.markup_pct if ln.markup_pct is not None else getattr(d.markups, k)
+        cat[k] += cost
+        tax += line_tax
+        charge[k] += (cost + line_tax) * (1 + m / 100)
+    for t in subs:
+        m = t.markup_pct if t.markup_pct is not None else d.markups.subcontractor
+        cat["subcontractor"] += t.sub_price or 0
+        charge["subcontractor"] += (t.sub_price or 0) * (1 + m / 100)
     total = labor + tax + sum(cat.values())
-    profit = d.price - total
+    subtotal = sum(charge.values())
+    overall = subtotal * d.overall_markup / 100
+    built = subtotal + overall
+    price = round(built + d.adjustment, 2) if d.priced == "built" else d.price
+    profit = price - total
     return {"hours": hours, "labor": labor, **cat, "sales_tax": tax, "total_cost": total,
-            "price": d.price, "profit": profit, "margin_pct": profit / d.price if d.price > 0 else None}
+            "charge": {k: round(v, 2) for k, v in charge.items()}, "subtotal": round(subtotal, 2),
+            "overall_markup": d.overall_markup if d.priced == "built" else 0, "overall_amount": round(overall, 2),
+            "built_price": round(built, 2), "adjustment": d.adjustment if d.priced == "built" else 0, "priced": d.priced,
+            "price": price, "profit": profit, "margin_pct": profit / price if price > 0 else None,
+            "markup_pct": profit / total if total > 0 else None}
+
+
+def finalize(d: EstimateData) -> EstimateData:
+    """Built prices are worked out here, never taken from the screen."""
+    if d.priced == "built":
+        price = totals(d)["price"]
+        if price < 0:
+            raise HTTPException(422, "The adjustment takes the price below zero.")
+        d = d.model_copy(update={"price": price})
+    return d
 
 
 # ---------- loading and rules ----------
@@ -144,13 +185,22 @@ def _check_refs(db: Session, user: User, body: EstimateIn) -> Client:
         found = set(db.scalars(select(StockItem.id).where(StockItem.id.in_(ids), StockItem.company_id == user.company_id)))
         if ids - found:
             raise HTTPException(422, "A cost line points at a price-list item that doesn't exist")
+    check_task_refs(db, body.data.tasks, user.company_id)
     return client
 
 
 def _new_version(e: Estimate, user: User, body: EstimateIn, number: int) -> EstimateVersion:
-    t = totals(body.data)
+    d = finalize(body.data)
+    t = totals(d)
     return EstimateVersion(company_id=user.company_id, estimate_id=e.id, version=number, created_by_id=user.id,
-                           data=body.data.model_dump_json(), price=t["price"], total_cost=t["total_cost"], note=body.note.strip())
+                           data=d.model_dump_json(), price=t["price"], total_cost=t["total_cost"], note=body.note.strip())
+
+
+def _adjust_note(d: EstimateData) -> str:
+    if d.priced != "built" or round(d.adjustment, 2) == 0:
+        return ""
+    sign = "+" if d.adjustment > 0 else "−"
+    return f"Price adjusted {sign}${abs(d.adjustment):,.2f}: {d.adjustment_reason.strip()}"
 
 
 def _next_number(db: Session, company_id: str) -> str:
@@ -208,7 +258,7 @@ def create_estimate(body: EstimateIn, user: User = Depends(estimators), db: Sess
             if attempt == 2:
                 raise HTTPException(409, "Couldn't number the estimate. Save again.")
     db.add(_new_version(e, user, body, 1))
-    log(db, user, "estimate", e.id, f"Started estimate {e.number} (v1)", body.note.strip())
+    log(db, user, "estimate", e.id, f"Started estimate {e.number} (v1)", "; ".join(filter(None, [body.note.strip(), _adjust_note(body.data)])))
     if lead:
         if lead.status == LeadStatus.new:
             lead.status = LeadStatus.estimating
@@ -266,7 +316,7 @@ def save_version(estimate_id: str, body: EstimateIn, user: User = Depends(estima
     if body.valid_days:
         e.valid_days = body.valid_days
     e.updated_at = utcnow()
-    log(db, user, "estimate", e.id, f"Saved v{number}", "; ".join(filter(None, [body.note.strip(), *moved])))
+    log(db, user, "estimate", e.id, f"Saved v{number}", "; ".join(filter(None, [body.note.strip(), _adjust_note(body.data), *moved])))
     db.commit()
     db.expire(e)
     return estimate_row(db, load_estimate(db, user, e.id), user)
@@ -353,7 +403,7 @@ def create_job(estimate_id: str, user: User = Depends(estimators), db: Session =
     body = JobIn(name=e.name, client=e.client.name, address=d.site_address, parcel_id=d.parcel_id, lat=d.lat, lng=d.lng,
                  court_type=d.court_type, scope_type=d.scope_type, contract_amount=d.price,
                  estimated_labor_rate=d.estimated_labor_rate, sales_tax_pct=d.sales_tax_pct,
-                 tasks=[t.model_copy(update={"id": None}) for t in d.tasks],
+                 tasks=[t.model_copy(update={"id": None, "template_id": t.template_id}) for t in d.tasks],
                  cost_lines=[c.model_copy(update={"id": None}) for c in d.cost_lines])
     job = build_job(db, user, body, client_id=e.client_id)
     e.job_id = job.id

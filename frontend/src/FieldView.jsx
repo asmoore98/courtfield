@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { amountText } from "./qty";
 import { DEMO, api, safeGet, safeSet } from "./api";
 import { getPosition, useFieldTime } from "./fieldStore";
 import HoursBar, { HoursText } from "./HoursBar";
@@ -264,7 +265,7 @@ export default function FieldView({ me }) {
           </span>
         </div>
         <ul className="tasks">
-          {job?.tasks.map((t) => {
+          {job?.tasks.filter((t) => t.kind !== "sub").map((t) => {
             const c = costByTask[t.id];
             const here = crew.filter((w) => field.openFor(w.id)?.task_id === t.id).length;
             return (
@@ -275,7 +276,10 @@ export default function FieldView({ me }) {
                   onClick={() => run(() => field.startTask(selectedIds, jobId, t.id))}
                 >
                   <span className="task-line">
-                    <span className="task-name">{t.name}</span>
+                    <span className="task-name">
+                      {t.name}
+                      {amountText(t) && <span className="task-qty"> · {amountText(t)}</span>}
+                    </span>
                     {c && <HoursText estimated={c.estimated_hours} actual={c.actual_hours} open={c.open_hours} />}
                   </span>
                   {c && <HoursBar estimated={c.estimated_hours} actual={c.actual_hours} open={c.open_hours} />}

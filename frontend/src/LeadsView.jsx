@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ClientPicker, saveClient } from "./ClientPicker";
 import { COURT_TYPES, SCOPE_TYPES } from "./JobEditor";
+import { ChecklistForm, ChecklistSummary, blankCourt, courtBody, courtForm, tidyAnswers, useChecklists } from "./Checklist";
 import {
   ActivityList, COURT_LABEL, LEAD_STATUS, LinkList, LinksField, NoteAction, Restored, SCOPE_LABEL, StatusChip, fmtDate, money0, useApi, useDraft, useScreen,
 } from "./bits";
@@ -78,6 +79,11 @@ function LeadList({ me, onOpen, onNew }) {
                   <span>{l.client_name}</span>
                   {l.court_type && <span>{COURT_LABEL[l.court_type]}{l.scope_type && `, ${SCOPE_LABEL[l.scope_type].toLowerCase()}`}</span>}
                   {l.salesperson && <span>Sales: {l.salesperson}</span>}
+                  {l.checklist && (
+                    <span className={l.checklist.done < l.checklist.total ? "t-near" : ""}>
+                      Checklist {l.checklist.done}/{l.checklist.total}
+                    </span>
+                  )}
                   {l.bid_due && <span className={new Date(l.bid_due) < new Date() && l.status === "new" ? "t-over" : ""}>Bid due {fmtDate(l.bid_due + "T12:00:00")}</span>}
                 </span>
               </button>
@@ -91,6 +97,7 @@ function LeadList({ me, onOpen, onNew }) {
 
 function LeadDetail({ me, id, go, onBack, onEdit }) {
   const { data: l, error, reload } = useApi(`/api/leads/${id}`);
+  const lists = useChecklists();
   if (error && !l) return <p className="empty">Couldn't load the lead: {error}</p>;
   if (!l) return <p className="empty">Loading lead…</p>;
   const setStatus = (status, reason) => api(`/api/leads/${id}/status`, { method: "POST", body: { status, reason } }).then(reload);
@@ -156,6 +163,20 @@ function LeadDetail({ me, id, go, onBack, onEdit }) {
         <LinkList text={l.links} empty="No links yet. Edit the lead to paste Google Drive links." />
       </section>
 
+      <section className="panel">
+        <div className="panel-head">
+          <h3>Site checklist</h3>
+          <button className="link" onClick={onEdit}>
+            {l.checklist && l.checklist.done > 1 ? "Update it" : "Fill it in"}
+          </button>
+        </div>
+        {l.scope_type ? (
+          <ChecklistSummary lists={lists} scope={l.scope_type} survey={l.survey} />
+        ) : (
+          <p className="help">Set the scope (resurfacing, repair or new construction) to get its checklist.</p>
+        )}
+      </section>
+
       {l.estimates.length > 0 && (
         <section className="panel">
           <h3>Estimates</h3>
@@ -195,6 +216,7 @@ const blankLead = () => ({
   links: "",
   bid_due: "",
   salesperson_id: "",
+  survey: { court: blankCourt(), answers: {} },
 });
 
 function LeadForm({ me, leadId, clientId, onDone, onCancel }) {
@@ -204,7 +226,9 @@ function LeadForm({ me, leadId, clientId, onDone, onCancel }) {
   const [fetchN, setFetchN] = useState(0);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
+  const lists = useChecklists();
   const f = d.form;
+  const survey = f.survey ?? { court: blankCourt(), answers: {} };
 
   useEffect(() => {
     api("/api/estimates/people").then(setPeople).catch(() => {});
@@ -213,7 +237,10 @@ function LeadForm({ me, leadId, clientId, onDone, onCancel }) {
     if (!leadId || d.restoredAt) return;
     api(`/api/leads/${leadId}`)
       .then((l) => {
-        d.discard({ ...blankLead(), ...l, court_type: l.court_type ?? "", scope_type: l.scope_type ?? "", bid_due: l.bid_due ?? "", salesperson_id: l.salesperson_id ?? "" });
+        d.discard({
+          ...blankLead(), ...l, court_type: l.court_type ?? "", scope_type: l.scope_type ?? "", bid_due: l.bid_due ?? "", salesperson_id: l.salesperson_id ?? "",
+          survey: { court: courtForm(l.survey?.court), answers: l.survey?.answers ?? {} },
+        });
         setLoaded(true);
       })
       .catch((e) => setError(e.message));
@@ -239,6 +266,8 @@ function LeadForm({ me, leadId, clientId, onDone, onCancel }) {
         links: f.links,
         bid_due: f.bid_due || null,
         salesperson_id: f.salesperson_id || null,
+        // the checklist for the scope chosen; left as it was if the questions didn't load
+        survey: lists ? { court: courtBody(survey.court), answers: tidyAnswers(lists.scopes[f.scope_type] ?? [], survey.answers) } : null,
       };
       const saved = leadId ? await api(`/api/leads/${leadId}`, { method: "PUT", body }) : await api("/api/leads", { method: "POST", body });
       d.done();
@@ -342,6 +371,20 @@ function LeadForm({ me, leadId, clientId, onDone, onCancel }) {
             <input value={f.parcel_id} onChange={(e) => d.set("parcel_id", e.target.value)} maxLength={60} />
           </label>
         </div>
+      </section>
+
+      <section className="panel">
+        <h3>Site checklist</h3>
+        {f.scope_type ? (
+          <>
+            <p className="help">
+              Fill this in on site. Every answer goes straight into the estimate, so the more exact it is, the closer the bid. Follow-up questions show up as you answer.
+            </p>
+            <ChecklistForm lists={lists} scope={f.scope_type} courtType={f.court_type} survey={survey} onChange={(v) => d.set("survey", v)} />
+          </>
+        ) : (
+          <p className="help">Pick the scope above (resurfacing, repair or new construction) and its checklist shows up here.</p>
+        )}
       </section>
 
       <section className="panel">

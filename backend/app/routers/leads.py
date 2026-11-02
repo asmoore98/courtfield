@@ -1,13 +1,17 @@
-"""Leads: what sales brings in for an estimator to price."""
+"""Leads: what sales brings in for an estimator to price, with the site
+checklist sales fills in on site."""
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from ..activity import changes, history, iso, log
 from ..auth import SALES_SIDE, require_roles
+from ..checklists import COURT_BLOCK, CHECKLISTS, answer_text, labels, progress, tidy
 from ..db import get_db
 from ..models import Estimate, Lead, LeadStatus, Role, User, utcnow
-from ..sales_schemas import LeadIn, LeadStatusIn
+from ..sales_schemas import LeadIn, LeadStatusIn, SiteSurvey
 from .clients import load_client
 
 router = APIRouter(prefix="/api/leads", tags=["leads"])
@@ -58,8 +62,46 @@ def _estimate_statuses(db: Session, company_id: str, lead_ids: list[str]) -> dic
     return out
 
 
+def survey_of(lead: Lead) -> dict:
+    try:
+        return SiteSurvey.model_validate(json.loads(lead.survey)).model_dump() if lead.survey else SiteSurvey().model_dump()
+    except ValueError:
+        return SiteSurvey().model_dump()
+
+
+COURT_LABELS = {"courts": ("Number of courts", ""), "length_ft": ("Court length", "ft"), "width_ft": ("Court width", "ft"),
+                "surface_sf": ("Measured surface", "SF"), "paint_sf": ("Paintable area", "SF")}
+
+
+def survey_changes(old: dict, new: dict, scope: str | None) -> str:
+    """Each changed answer, old → new, for the activity trail."""
+    out = []
+    for k, (label, unit) in COURT_LABELS.items():
+        a, b = old["court"].get(k), new["court"].get(k)
+        if a != b:
+            fmt = lambda v: "—" if v is None else f"{v:g}{' ' + unit if unit else ''}"
+            out.append(f"{label}: {fmt(a)} → {fmt(b)}")
+    qs = labels(scope)
+    for k in list(dict.fromkeys([*old["answers"], *new["answers"]])):
+        a, b = old["answers"].get(k), new["answers"].get(k)
+        if a != b:
+            qq = qs.get(k)
+            label = qq["label"] if qq else k
+            out.append(f"{label}{'' if label.endswith('?') else ':'} {answer_text(qq, a)} → {answer_text(qq, b)}")
+    return "; ".join(out)
+
+
+def _clean_survey(body: LeadIn) -> str:
+    sv = body.survey or SiteSurvey()
+    scope = body.scope_type.value if body.scope_type else None
+    return json.dumps({"court": sv.court.model_dump(), "answers": tidy(scope, sv.answers)})
+
+
 def lead_out(lead: Lead, statuses: list[str] | None = None) -> dict:
+    survey = survey_of(lead)
+    scope = lead.scope_type.value if lead.scope_type else None
     return {
+        "survey": survey, "checklist": progress(scope, survey),
         "outcome": outcome(lead, statuses or []),
         "id": lead.id, "client_id": lead.client_id, "client_name": lead.client.name, "name": lead.name,
         "site_address": lead.site_address, "parcel_id": lead.parcel_id,
@@ -90,11 +132,17 @@ def list_leads(status: LeadStatus | None = None, user: User = Depends(sales_side
     return [lead_out(l, st.get(l.id)) for l in leads]
 
 
+@router.get("/checklists")
+def checklists(user: User = Depends(sales_side)):
+    """The site checklist for each kind of work."""
+    return {"court": COURT_BLOCK, "scopes": CHECKLISTS}
+
+
 @router.post("", status_code=201)
 def add_lead(body: LeadIn, user: User = Depends(sales_side), db: Session = Depends(get_db)):
     load_client(db, user, body.client_id)
     _check_salesperson(db, user, body.salesperson_id)
-    data = body.model_dump()
+    data = body.model_dump(exclude={"survey"}) | {"survey": _clean_survey(body)}
     if user.role == Role.sales:
         data["salesperson_id"] = user.id  # sales always owns what they bring in
     lead = Lead(company_id=user.company_id, created_by_id=user.id, **data)
@@ -123,17 +171,24 @@ def edit_lead(lead_id: str, body: LeadIn, user: User = Depends(sales_side), db: 
     lead = load_lead(db, user, lead_id)
     client = load_client(db, user, body.client_id)
     _check_salesperson(db, user, body.salesperson_id)
-    new = body.model_dump()
+    new = body.model_dump(exclude={"survey"})
     if user.role == Role.sales:
         new["salesperson_id"] = lead.salesperson_id or user.id
     what = changes({k: _plain(getattr(lead, k)) for k in FIELDS}, {k: _plain(new[k]) for k in FIELDS}, FIELDS)
     if lead.client_id != client.id:
         what = "; ".join(filter(None, [f"Client: {lead.client.name} → {client.name}", what]))
+    checklist_what = ""
+    if body.survey is not None:
+        before = survey_of(lead)
+        new["survey"] = _clean_survey(body)
+        checklist_what = survey_changes(before, json.loads(new["survey"]), _plain(new["scope_type"]))
     for k, v in new.items():
         setattr(lead, k, v)
     lead.updated_at = utcnow()
     if what:
         log(db, user, "lead", lead.id, "Edited lead", what)
+    if checklist_what:
+        log(db, user, "lead", lead.id, "Changed the site checklist", checklist_what)
     db.commit()
     db.expire(lead)
     return lead_out(load_lead(db, user, lead.id))
