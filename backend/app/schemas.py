@@ -1,9 +1,15 @@
 """Request and response shapes for the API."""
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+from typing import Literal
 
-from .models import CostCategory, CourtType, JobStatus, Role, ScopeType, TaskType
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
+
+from .models import CostCategory, CourtType, JobStatus, Role, ScopeType, TaskKind, TaskType
+from .quantities import worked_hours
+
+Unit = Literal["hr", "sf", "sf_coat", "lf", "sy", "cy", "ton", "ea", "ls"]
+Follows = Literal["", "surface", "paint", "courts"]
 
 
 def to_naive_utc(value: datetime | None) -> datetime | None:
@@ -50,8 +56,33 @@ class TaskIn(BaseModel):
     id: str | None = None  # set when editing an existing task; omit for a new one
     task_type: TaskType
     name: str = Field(min_length=1, max_length=200)
-    estimated_hours: float = Field(ge=0)
+    estimated_hours: float = Field(default=0, ge=0)
     sort_order: int = 0
+    kind: TaskKind = TaskKind.crew
+    cost_rate: float | None = Field(default=None, ge=0, le=100_000)    # $/hr it costs us
+    charge_rate: float | None = Field(default=None, ge=0, le=100_000)  # $/hr we bill
+    sub_id: str | None = None
+    sub_price: float | None = Field(default=None, ge=0, le=100_000_000)
+    sub_quote_link: str = Field(default="", max_length=500)
+    template_id: str | None = None  # library entry this task came from
+    markup_pct: float | None = Field(default=None, ge=-100, le=1000)  # estimates only: this sub's markup (blank = the default)
+    # How the work is measured (quantities.py). With a production rate, the
+    # hours are worked out here and whatever hours were sent are replaced.
+    unit: Unit = "hr"
+    quantity: float | None = Field(default=None, ge=0, le=10_000_000)
+    coats: float | None = Field(default=None, ge=0, le=50)
+    production_rate: float | None = Field(default=None, ge=0, le=1_000_000)
+    unit_price: float | None = Field(default=None, ge=0, le=1_000_000)
+    follows: Follows = ""  # estimates only: quantity comes from the court size
+
+    @model_validator(mode="after")
+    def _hours(self):
+        if self.kind == TaskKind.sub:
+            return self
+        h = worked_hours(self.unit, self.quantity, self.coats, self.production_rate)
+        if h is not None:
+            self.estimated_hours = h
+        return self
 
 
 class TaskOut(ORM):
@@ -60,6 +91,18 @@ class TaskOut(ORM):
     name: str
     estimated_hours: float
     sort_order: int
+    kind: TaskKind = TaskKind.crew
+    cost_rate: float | None = None
+    charge_rate: float | None = None
+    sub_id: str | None = None
+    sub_price: float | None = None
+    sub_quote_link: str = ""
+    template_id: str | None = None
+    unit: str = "hr"
+    quantity: float | None = None
+    coats: float | None = None
+    production_rate: float | None = None
+    unit_price: float | None = None
 
 
 class CostLineIn(BaseModel):
@@ -72,6 +115,12 @@ class CostLineIn(BaseModel):
     # Position of the linked task in this save's task list (new tasks have no id yet).
     task_index: int | None = Field(default=None, ge=0)
     item_id: str | None = None  # price-list item this line came from
+    in_house: bool = False  # equipment we own rather than rent
+    markup_pct: float | None = Field(default=None, ge=-100, le=1000)  # estimates only: this line's markup (blank = the default)
+    # Estimates only: work the quantity out from the court area.
+    follows: Follows = ""
+    coats: float | None = Field(default=None, ge=0, le=50)
+    coverage: float | None = Field(default=None, ge=0, le=1_000_000)  # SF one unit covers, per coat
 
 
 class CostLineOut(ORM):
@@ -84,6 +133,7 @@ class CostLineOut(ORM):
     task_id: str | None
     item_id: str | None = None
     sort_order: int
+    in_house: bool = False
 
 
 class JobIn(BaseModel):
@@ -262,6 +312,11 @@ class TaskCosting(BaseModel):
     status: str                  # "under" | "near" | "over" | "no_estimate"
     estimated_labor_cost: float | None = None
     actual_labor_cost: float | None = None
+    kind: str = "crew"
+    sub_price: float | None = None  # sub tasks: the sub's price (dollar roles only)
+    unit: str = "hr"
+    quantity: float | None = None  # how much work: 120 LF of cracks, 3,400 SF a coat…
+    coats: float | None = None
 
 
 class JobCosting(BaseModel):

@@ -10,6 +10,7 @@ import LeadsView from "./LeadsView";
 import EstimatesView from "./EstimatesView";
 import ClientsView from "./ClientsView";
 import SettingsView from "./SettingsView";
+import LibraryView from "./LibraryView";
 
 const ME_KEY = "cf.me";
 // Sample sign-ins: shown in the preview and in local development only.
@@ -236,12 +237,14 @@ export default function App() {
   const canMaterials = !DEMO && ["gm", "estimator", "pm", "owner", "warehouse"].includes(me.role);
   const canSales = !DEMO && !!me.sales_side;
   const canSettings = !DEMO && me.role === "gm";
+  const canLibrary = !DEMO && !!me.estimates;
   const views = [
     canField && ["field", "Field"],
     canOffice && ["office", "Jobs"],
     canSales && ["leads", "Leads"],
     canSales && ["estimates", "Estimates"],
     canSales && ["clients", "Clients"],
+    canLibrary && ["library", "Library"],
     canCrews && ["crews", "Crews"],
     canMaterials && ["materials", "Materials"],
     canPayroll && ["timesheets", "Timesheets"],
@@ -289,6 +292,8 @@ export default function App() {
           <EstimatesView me={me} go={go} {...navProps("estimates")} />
         ) : view === "clients" && canSales ? (
           <ClientsView me={me} go={go} {...navProps("clients")} />
+        ) : view === "library" && canLibrary ? (
+          <LibraryView me={me} go={go} {...navProps("library")} />
         ) : view === "settings" && canSettings ? (
           <SettingsView />
         ) : view === "crews" && canCrews ? (
@@ -302,7 +307,7 @@ export default function App() {
         ) : view === "field" && canField ? (
           <FieldView me={me} />
         ) : (
-          <OfficeView me={me} {...navProps("office")} />
+          <OfficeView me={me} go={go} {...navProps("office")} />
         )}
       </main>
     </div>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { amountText } from "./qty";
 import { DEMO, api } from "./api";
 import { useScreen } from "./bits";
 import JobEditor, { COST_CATEGORIES, EstimateTable } from "./JobEditor";
@@ -188,7 +189,7 @@ function EstimatePanel({ jobId, costing, version }) {
                       <th scope="row">
                         {l.description}
                         <span className="sub">
-                          {CAT_LABEL[l.category]}
+                          {l.category === "equipment" ? (l.in_house ? "In-house equipment" : "Equipment rental") : CAT_LABEL[l.category]}
                           {l.task_id && taskName[l.task_id] ? ` · ${taskName[l.task_id]}` : ""}
                         </span>
                       </th>
@@ -287,9 +288,28 @@ function JobDetail({ me, jobId, onBack, onEdit }) {
             </tr>
           </thead>
           <tbody>
-            {c.tasks.map((t) => (
+            {c.tasks.map((t) =>
+              t.kind === "sub" ? (
+                <tr key={t.task_id} className="sub-task-row">
+                  <th scope="row">
+                    {t.name}
+                    <span className="sub">Done by a sub</span>
+                  </th>
+                  <td className="w-bar sub-inline">No crew hours: the sub does this work</td>
+                  <td className="num">—</td>
+                  {sees$ && (
+                    <td className="num">
+                      {money(t.sub_price ?? 0)}
+                      <span className="sub">sub price</span>
+                    </td>
+                  )}
+                </tr>
+              ) : (
               <tr key={t.task_id}>
-                <th scope="row">{t.name}</th>
+                <th scope="row">
+                  {t.name}
+                  {amountText(t) && <span className="sub">{amountText(t)}</span>}
+                </th>
                 <td className="w-bar">
                   <HoursBar estimated={t.estimated_hours} actual={t.actual_hours} open={t.open_hours} />
                 </td>
@@ -304,7 +324,8 @@ function JobDetail({ me, jobId, onBack, onEdit }) {
                   </td>
                 )}
               </tr>
-            ))}
+              )
+            )}
           </tbody>
         </table>
       </section>
@@ -325,7 +346,7 @@ function JobDetail({ me, jobId, onBack, onEdit }) {
 
 const SCREEN_KEY = "cf.office.screen";
 
-export default function OfficeView({ me, initial }) {
+export default function OfficeView({ me, go, initial }) {
   // screen: { view: "list" } | { view: "job", id } | { view: "edit", id? }
   // An open job editor is remembered, so switching tabs and coming back lands
   // on the same form (its unsaved work is kept as a draft by the editor).
@@ -334,6 +355,8 @@ export default function OfficeView({ me, initial }) {
   if (screen.view === "edit")
     return (
       <JobEditor
+        me={me}
+        go={go}
         jobId={screen.id}
         onDone={(id) => setScreen({ view: "job", id })}
         onCancel={() => (screen.id ? setScreen({ view: "job", id: screen.id }) : toList())}

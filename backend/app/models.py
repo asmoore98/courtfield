@@ -78,6 +78,16 @@ class TaskType(str, enum.Enum):
     nets_posts = "nets_posts"
     lighting = "lighting"
     other = "other"
+    site_work = "site_work"    # clearing, grading, base, compaction
+    paving = "paving"          # asphalt, concrete, curbing
+    turf = "turf"
+    drainage = "drainage"
+    cleanup = "cleanup"
+
+
+class TaskKind(str, enum.Enum):
+    crew = "crew"  # our people: hours x rate
+    sub = "sub"    # a subcontractor's price for the whole task
 
 
 class CostCategory(str, enum.Enum):
@@ -114,6 +124,14 @@ class Company(Base):
     proposal_terms: Mapped[str] = mapped_column(Text, default="", server_default="")
     # Days a sent estimate stays good before it's marked expired.
     estimate_valid_days: Mapped[int] = mapped_column(Integer, default=30, server_default="30")
+    # Pricing defaults for new estimates. Rates fill in tasks that have none
+    # of their own in the library; markups are percent over cost.
+    default_cost_rate: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    default_charge_rate: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    markup_material: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    markup_equipment: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    markup_subcontractor: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    markup_other: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
 
 
 class User(Base):
@@ -213,8 +231,33 @@ class JobTask(Base):
     name: Mapped[str] = mapped_column(String(200))
     estimated_hours: Mapped[float] = mapped_column(Float, default=0.0)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # Crew work is hours x cost rate; sub work is the sub's price. A task with
+    # no cost rate of its own uses the job's old single labor rate.
+    kind: Mapped[TaskKind] = mapped_column(Enum(TaskKind), default=TaskKind.crew, server_default="crew")
+    cost_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    charge_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sub_id: Mapped[str | None] = mapped_column(ForeignKey("subcontractors.id"), nullable=True)
+    sub_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sub_quote_link: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    template_id: Mapped[str | None] = mapped_column(ForeignKey("task_templates.id", ondelete="SET NULL"), nullable=True)
+    # How the work is measured (see quantities.py). With a production rate the
+    # hours are worked out from the quantity; "hr" tasks have their hours typed.
+    unit: Mapped[str] = mapped_column(String(10), default="hr", server_default="hr")
+    quantity: Mapped[float | None] = mapped_column(Float, nullable=True)
+    coats: Mapped[float | None] = mapped_column(Float, nullable=True)
+    production_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    unit_price: Mapped[float | None] = mapped_column(Float, nullable=True)  # what we charge per unit
 
     job: Mapped[Job] = relationship(back_populates="tasks")
+
+    def labor_rate(self) -> float:
+        return self.cost_rate if self.cost_rate is not None else (self.job.estimated_labor_rate or 0.0)
+
+    def estimated_cost(self) -> float:
+        """What this task is expected to cost us."""
+        if self.kind == TaskKind.sub:
+            return self.sub_price or 0.0
+        return self.estimated_hours * self.labor_rate()
 
 
 class StockItem(Base):
@@ -252,6 +295,8 @@ class CostLine(Base):
     unit: Mapped[str] = mapped_column(String(20), default="")
     unit_cost: Mapped[float] = mapped_column(Float, default=0.0)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # Equipment we own (true) or rent (false). Only means something on equipment lines.
+    in_house: Mapped[bool] = mapped_column(default=False, server_default="false")
 
     job: Mapped[Job] = relationship(back_populates="cost_lines")
 
@@ -411,6 +456,8 @@ class Lead(Base):
     status: Mapped[LeadStatus] = mapped_column(Enum(LeadStatus), default=LeadStatus.new)
     status_reason: Mapped[str] = mapped_column(Text, default="")
     salesperson_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    # The site checklist sales fills in on site: court size and answers (JSON).
+    survey: Mapped[str] = mapped_column(Text, default="", server_default="")
     created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -502,3 +549,50 @@ class Activity(Base):
     at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     by: Mapped[User | None] = relationship()
+
+
+# ---------- library: tasks and subcontractors ----------
+
+class TaskTemplate(Base):
+    """One entry in the task library: the official name, the other names
+    people use for the same work, and its usual rates. The GM keeps it."""
+
+    __tablename__ = "task_templates"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    aliases: Mapped[str] = mapped_column(Text, default="")  # other names for the same work, one per line
+    task_type: Mapped[TaskType] = mapped_column(Enum(TaskType), default=TaskType.other)
+    kind: Mapped[TaskKind] = mapped_column(Enum(TaskKind), default=TaskKind.crew)
+    cost_rate: Mapped[float | None] = mapped_column(Float, nullable=True)    # $/hr it costs us
+    charge_rate: Mapped[float | None] = mapped_column(Float, nullable=True)  # $/hr we bill
+    unit: Mapped[str] = mapped_column(String(10), default="hr", server_default="hr")
+    production_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    unit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    coats: Mapped[float | None] = mapped_column(Float, nullable=True)  # usual number of coats (SF per coat tasks)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    active: Mapped[bool] = mapped_column(default=True)
+    created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Subcontractor(Base):
+    """A sub we hire: fence, lighting, paving, concrete, surveying… Never
+    deleted; turned off."""
+
+    __tablename__ = "subcontractors"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    trade: Mapped[str] = mapped_column(String(100), default="")
+    contact_name: Mapped[str] = mapped_column(String(200), default="")
+    phone: Mapped[str] = mapped_column(String(40), default="")
+    email: Mapped[str] = mapped_column(String(254), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    links: Mapped[str] = mapped_column(Text, default="")
+    active: Mapped[bool] = mapped_column(default=True)
+    created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

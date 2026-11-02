@@ -32,7 +32,32 @@ def _serialize(job: Job, user: User) -> JobOut:
         out.estimated_labor_rate = None
         out.sales_tax_pct = None
         out.cost_lines = None
+        for t in out.tasks:  # crews see the work and the hours, never the money
+            t.cost_rate = t.charge_rate = t.sub_price = t.unit_price = None
+            t.sub_quote_link = ""
     return out
+
+
+def check_task_refs(db: Session, tasks, company_id: str) -> None:
+    """Subs and library entries named on tasks must belong to this company."""
+    from ..models import Subcontractor, TaskTemplate
+    for model, ids in ((Subcontractor, {t.sub_id for t in tasks if t.sub_id}), (TaskTemplate, {t.template_id for t in tasks if t.template_id})):
+        if ids:
+            found = set(db.scalars(select(model.id).where(model.id.in_(ids), model.company_id == company_id)))
+            if ids - found:
+                raise HTTPException(422, "A task points at a sub or library entry that doesn't exist")
+
+
+def task_fields(t) -> dict:
+    """What gets stored for a task. Sub tasks have no crew hours."""
+    from ..models import TaskKind
+    f = t.model_dump(exclude={"id", "sort_order", "markup_pct", "follows"})  # markups and court links live on the estimate
+    if t.kind == TaskKind.sub:
+        f["estimated_hours"] = 0.0
+        f.update(unit="hr", quantity=None, coats=None, production_rate=None, unit_price=None)
+    else:
+        f["sub_id"], f["sub_price"], f["sub_quote_link"] = None, None, ""
+    return f
 
 
 def _check_items(db: Session, lines, company_id: str) -> None:
@@ -59,7 +84,7 @@ def _apply_cost_lines(job: Job, lines, tasks_in_order: list[JobTask], company_id
         task = tasks_in_order[ln.task_index] if ln.task_index is not None else None
         fields = dict(category=ln.category, description=ln.description.strip(), quantity=ln.quantity,
                       unit=ln.unit.strip(), unit_cost=ln.unit_cost, sort_order=order, task_id=task.id if task else None,
-                      item_id=ln.item_id)
+                      item_id=ln.item_id, in_house=ln.in_house)
         if ln.id:
             for k, v in fields.items():
                 setattr(existing[ln.id], k, v)
@@ -102,8 +127,9 @@ def build_job(db: Session, user: User, body: JobIn, client_id: str | None = None
     if user.role != Role.gm:
         data["status"] = JobStatus.scheduled  # only the GM starts or closes jobs
     job = Job(company_id=user.company_id, client_id=client_id, **data)
+    check_task_refs(db, body.tasks, user.company_id)
     for i, t in enumerate(body.tasks):
-        job.tasks.append(JobTask(company_id=user.company_id, sort_order=i, **t.model_dump(exclude={"id", "sort_order"})))
+        job.tasks.append(JobTask(company_id=user.company_id, sort_order=i, **task_fields(t)))
     db.add(job)
     db.flush()  # task ids for cost lines
     _check_items(db, body.cost_lines, user.company_id)
@@ -168,6 +194,7 @@ def update_job(job_id: str, body: JobUpdate, user: User = Depends(require_roles(
         names = ", ".join(sorted(existing[i].name for i in blocked))
         raise HTTPException(409, f"Crew time is logged on {names}, so it can't be removed. Set its hours instead.")
 
+    check_task_refs(db, body.tasks, user.company_id)
     for k, v in body.model_dump(exclude={"tasks", "status", "cost_lines"}).items():
         setattr(job, k, v)
     for i in removed:
@@ -177,7 +204,7 @@ def update_job(job_id: str, body: JobUpdate, user: User = Depends(require_roles(
         job.tasks.remove(existing[i])
     in_order: list[JobTask] = []
     for order, t in enumerate(body.tasks):
-        fields = t.model_dump(exclude={"id", "sort_order"})
+        fields = task_fields(t)
         if t.id:
             for k, v in fields.items():
                 setattr(existing[t.id], k, v)

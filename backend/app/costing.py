@@ -5,7 +5,7 @@ import math
 from collections import defaultdict
 from datetime import datetime
 
-from .models import CostCategory, Job, JobStatus, TimeEntry, utcnow
+from .models import CostCategory, Job, JobStatus, TaskKind, TimeEntry, utcnow
 
 NEAR_THRESHOLD = 0.90   # at or above 90% of estimated hours -> "near"
 OFF_SITE_METERS = 400   # GPS stamp farther than this from the job pin -> flagged
@@ -48,7 +48,9 @@ def estimate_summary(job: Job) -> dict:
     by_cat = {c.value: 0.0 for c in CostCategory}
     for line in job.cost_lines:
         by_cat[line.category.value] += line.quantity * line.unit_cost
-    labor = sum(t.estimated_hours for t in job.tasks) * job.estimated_labor_rate
+    # Each task has its own rate now; sub tasks count as subcontractor cost.
+    labor = sum(t.estimated_cost() for t in job.tasks if t.kind != TaskKind.sub)
+    by_cat["subcontractor"] += sum(t.estimated_cost() for t in job.tasks if t.kind == TaskKind.sub)
     sales_tax = by_cat["material"] * (job.sales_tax_pct or 0) / 100
     total = labor + sum(by_cat.values()) + sales_tax
     contract = job.contract_amount or 0
@@ -95,9 +97,15 @@ def job_costing(job: Job, entries: list[TimeEntry], with_dollars: bool, now: dat
             "open_hours": round(open_h[t.id], 2),
             "hours_used_pct": None if used is None else round(used, 4),
             "status": _status(used),
+            "kind": t.kind.value if t.kind else "crew",
+            "unit": t.unit or "hr",
+            "quantity": t.quantity,
+            "coats": t.coats,
         }
         if with_dollars:
-            row["estimated_labor_cost"] = round(t.estimated_hours * job.estimated_labor_rate, 2)
+            row["estimated_labor_cost"] = round(t.estimated_cost(), 2) if t.kind != TaskKind.sub else 0.0
+            if t.kind == TaskKind.sub:
+                row["sub_price"] = t.sub_price or 0.0
             row["actual_labor_cost"] = round(cost[t.id], 2)
         tasks.append(row)
 
@@ -116,7 +124,7 @@ def job_costing(job: Job, entries: list[TimeEntry], with_dollars: bool, now: dat
         "tasks": tasks,
     }
     if with_dollars:
-        est_cost = round(est * job.estimated_labor_rate, 2)
+        est_cost = round(sum(t.estimated_cost() for t in job.tasks if t.kind != TaskKind.sub), 2)
         act_cost = round(sum(cost.values()), 2)
         out |= {
             "contract_amount": job.contract_amount,

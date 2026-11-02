@@ -227,6 +227,7 @@ def seed() -> None:
                      unit="gal", quantity=2, unit_cost=items["Crack filler"].unit_cost, recorded_by_id=wh.id,
                      note="Found a few cracks at the north baseline"))
     _seed_sales(db, co, users)
+    _seed_library(db, co, users)
     db.commit()
     db.close()
     print(f"Seeded sample data. Sign in as any of {', '.join(dev_email(k) for k in ACCOUNTS)} with password {DEV_PASSWORD}")
@@ -259,6 +260,17 @@ def _seed_sales(db, co, users) -> None:
                 links="https://drive.google.com/drive/folders/sample-site-photos", status=LeadStatus.estimated,
                 salesperson_id=sales.id, created_by_id=sales.id, bid_due=(now + timedelta(days=10)).date())
     db.add(lead)
+    import json
+    survey = {"court": {"courts": 2, "length_ft": 120, "width_ft": 60, "surface_sf": None, "paint_sf": None},
+              "answers": {"surface": "Asphalt", "cracks": "yes", "crack_lf": 140, "crack_width": '1/4" to 1/2"', "membrane": "no",
+                          "low_spots": "yes", "low_sf": 60, "peeling": "no", "mildew": "yes", "heaving": "no",
+                          "lines": ["Tennis", "Pickleball"], "pb_courts": 4, "lines_change": "no", "colors": "Blue inside, green outside",
+                          "nets": "yes", "net_type": "Tennis", "net_count": 2, "posts": "no", "water": "yes", "power": "yes",
+                          "truck_access": "yes", "photos": "yes"}}
+    db.add(Lead(company_id=co.id, client_id=clients["Seabreeze Club (sample)"].id, name="Seabreeze – resurface 2 tennis courts",
+                site_address="200 Sample Rd, Jupiter, FL 33458", court_type=CourtType.tennis, scope_type=ScopeType.resurfacing,
+                description="Board wants pickleball lines added on both courts. Cracks along the north side.",
+                survey=json.dumps(survey), salesperson_id=sales.id, created_by_id=sales.id))
     db.flush()
 
     def data(price, rate, tasks, lines, **kw):
@@ -306,6 +318,32 @@ def _seed_sales(db, co, users) -> None:
         if status == EstimateStatus.lost:
             db.add(Activity(company_id=co.id, kind="estimate", subject_id=e.id, action="Marked lost", detail="Went with a cheaper bid (sample)",
                             by_id=sales.id, at=e.decided_at))
+
+
+def _seed_library(db, co, users) -> None:
+    """Starter task list, a few sample subs, and made-up default rates."""
+    from .library_starter import STARTER_TASKS, STARTER_UNITS
+    from .models import Subcontractor, TaskTemplate
+
+    gm = users["dev-gm"]
+    co.default_cost_rate, co.default_charge_rate = 34.0, 68.0
+    co.markup_material, co.markup_equipment, co.markup_subcontractor, co.markup_other = 20.0, 15.0, 10.0, 10.0
+    sample_rates = {"Rough grading": (95.0, 175.0), "Clearing and grubbing": (90.0, 165.0), "Fine grading": (85.0, 160.0),
+                    "Pressure wash": (38.0, 75.0), "Broom clean": (30.0, 55.0)}
+    # Made-up production rates and prices per unit, to show how they work.
+    sample_units = {"Pressure wash": (900.0, 0.07), "Crack fill": (40.0, 1.4), "Acrylic resurfacer": (500.0, 0.11),
+                    "Color coat": (600.0, 0.09), "Line painting": (6.0, 330.0), "Install nets and center straps": (1.0, 60.0),
+                    "Install net posts": (2.5, 140.0), "Low-spot patch": (25.0, 2.2)}
+    for name, aliases, ttype, kind in STARTER_TASKS:
+        cost, charge = sample_rates.get(name, (None, None))
+        unit, coats = STARTER_UNITS.get(name, ("hr", None))
+        rate, price = sample_units.get(name, (None, None))
+        db.add(TaskTemplate(company_id=co.id, name=name, aliases="\n".join(aliases), task_type=ttype, kind=kind,
+                            cost_rate=cost, charge_rate=charge, unit=unit, coats=coats, production_rate=rate, unit_price=price,
+                            created_by_id=gm.id))
+    for name, trade, phone in [("A1 Fence (sample)", "Fence", "(555) 010-0201"), ("Bright Lights Electric (sample)", "Lighting / electrical", "(555) 010-0202"),
+                               ("Coastal Paving (sample)", "Asphalt and concrete", "(555) 010-0203")]:
+        db.add(Subcontractor(company_id=co.id, name=name, trade=trade, phone=phone, created_by_id=gm.id))
 
 
 if __name__ == "__main__":
