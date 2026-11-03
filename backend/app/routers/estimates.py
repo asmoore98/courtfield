@@ -50,18 +50,24 @@ def totals(d: EstimateData) -> dict:
     charge rate; every line and sub plus
     its own markup (or the default for its kind; materials are marked up with
     their tax); then the markup on the whole job; then the adjustment.
+    Fees (permits, city fees) pass through at cost: no markup of any kind.
     """
     crew = [t for t in d.tasks if t.kind == TaskKind.crew]
     subs = [t for t in d.tasks if t.kind == TaskKind.sub]
     hours = sum(t.estimated_hours for t in crew)
     labor = sum(t.estimated_hours * (t.cost_rate if t.cost_rate is not None else d.estimated_labor_rate) for t in crew)
-    cat = {"material": 0.0, "equipment": 0.0, "subcontractor": 0.0, "other": 0.0}
+    cat = {"material": 0.0, "equipment": 0.0, "subcontractor": 0.0, "other": 0.0, "fee": 0.0}
     charge = {"labor": sum(labor_charge(t) for t in crew),
               "material": 0.0, "equipment": 0.0, "subcontractor": 0.0, "other": 0.0}
+    fees = 0.0
     tax = 0.0
     for ln in d.cost_lines:
         k = ln.category.value
         cost = ln.quantity * ln.unit_cost
+        if k == "fee":
+            cat["fee"] += cost
+            fees += cost
+            continue
         line_tax = cost * d.sales_tax_pct / 100 if k == "material" else 0.0
         m = ln.markup_pct if ln.markup_pct is not None else getattr(d.markups, k)
         cat[k] += cost
@@ -74,11 +80,11 @@ def totals(d: EstimateData) -> dict:
     total = labor + tax + sum(cat.values())
     subtotal = sum(charge.values())
     overall = subtotal * d.overall_markup / 100
-    built = subtotal + overall
+    built = subtotal + overall + fees
     price = round(built + d.adjustment, 2) if d.priced == "built" else d.price
     profit = price - total
     return {"hours": hours, "labor": labor, **cat, "sales_tax": tax, "total_cost": total,
-            "charge": {k: round(v, 2) for k, v in charge.items()}, "subtotal": round(subtotal, 2),
+            "charge": {k: round(v, 2) for k, v in charge.items()}, "subtotal": round(subtotal, 2), "fees": round(fees, 2),
             "overall_markup": d.overall_markup if d.priced == "built" else 0, "overall_amount": round(overall, 2),
             "built_price": round(built, 2), "adjustment": d.adjustment if d.priced == "built" else 0, "priced": d.priced,
             "price": price, "profit": profit, "margin_pct": profit / price if price > 0 else None,
@@ -333,6 +339,8 @@ def set_status(estimate_id: str, body: EstimateStatusIn, user: User = Depends(sa
         raise HTTPException(422, "Say why, so we can learn from it (price, timing, went with someone else…).")
     if body.status == e.status and body.status != EstimateStatus.sent:
         return estimate_row(db, e, user)
+    if body.status == EstimateStatus.sent and e.status != EstimateStatus.won and not body.checked_customer_text:
+        raise HTTPException(422, "Read what the customer will see on the proposal and tick the box first.")
     old = e.status
     now = utcnow()
     e.status = body.status
@@ -401,6 +409,7 @@ def create_job(estimate_id: str, user: User = Depends(estimators), db: Session =
     v = current(e)
     d = EstimateData.model_validate_json(v.data)
     body = JobIn(name=e.name, client=e.client.name, address=d.site_address, parcel_id=d.parcel_id, lat=d.lat, lng=d.lng,
+                 **{f"site_{k}": getattr(d, f"site_{k}") for k in ("street", "city", "state", "zip")},
                  court_type=d.court_type, scope_type=d.scope_type, contract_amount=d.price,
                  estimated_labor_rate=d.estimated_labor_rate, sales_tax_pct=d.sales_tax_pct,
                  tasks=[t.model_copy(update={"id": None, "template_id": t.template_id}) for t in d.tasks],
@@ -433,5 +442,9 @@ def proposal(estimate_id: str, user: User = Depends(sales_side), db: Session = D
         "issued": iso(issued), "valid_until": iso(issued + timedelta(days=e.valid_days)), "valid_days": e.valid_days,
         "site_address": d.site_address, "parcel_id": d.parcel_id, "court_type": d.court_type.value, "scope_type": d.scope_type.value,
         "scope_text": d.scope_text, "work_items": [t.name for t in d.tasks], "exclusions": d.exclusions, "price": d.price,
+        "notes": d.customer_notes,
+        # fees are listed so the client sees they're already in the price
+        "fees": [{"description": ln.description, "amount": round(ln.quantity * ln.unit_cost, 2)}
+                 for ln in d.cost_lines if ln.category.value == "fee" and ln.quantity * ln.unit_cost > 0],
         "salesperson": e.salesperson.name if e.salesperson else None,
     }

@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..activity import changes, history, iso, log
+from ..activity import changes, history, iso, log, log_system
 from ..auth import ESTIMATES, require_roles
 from ..db import get_db
 from ..library_starter import STARTER_TASKS, STARTER_UNITS
@@ -107,9 +107,31 @@ def _plain(v):
 
 # ---------- everything an estimate form needs ----------
 
+def add_starter(db: Session, user: User) -> int:
+    """Add the starter list. Names already in the library are skipped."""
+    existing = list(db.scalars(select(TaskTemplate).where(TaskTemplate.company_id == user.company_id)))
+    taken = {n.lower() for t in existing for n in [t.name, *t.aliases.split("\n")] if n}
+    added = 0
+    for name, aliases, ttype, kind in STARTER_TASKS:
+        free = [a for a in aliases if a.lower() not in taken]
+        if name.lower() in taken:
+            continue
+        unit, coats = STARTER_UNITS.get(name, ("hr", None))
+        db.add(TaskTemplate(company_id=user.company_id, created_by_id=user.id, name=name, aliases="\n".join(free),
+                            task_type=ttype, kind=kind, unit=unit, coats=coats))
+        taken |= {name.lower(), *(a.lower() for a in free)}
+        added += 1
+    return added
+
+
 @router.get("")
 def library(user: User = Depends(estimators), db: Session = Depends(get_db)):
     c = db.get(Company, user.company_id)
+    # A company starts with the starter list already in, so nobody opens an empty library.
+    if not db.scalar(select(func.count()).select_from(TaskTemplate).where(TaskTemplate.company_id == user.company_id)):
+        n = add_starter(db, user)
+        log_system(db, user.company_id, "library", user.company_id, f"Loaded the starter task list ({n} tasks)")
+        db.commit()
     tasks = db.scalars(select(TaskTemplate).where(TaskTemplate.company_id == user.company_id).order_by(func.lower(TaskTemplate.name)))
     subs = db.scalars(select(Subcontractor).where(Subcontractor.company_id == user.company_id).order_by(func.lower(Subcontractor.name)))
     return {"tasks": [task_out(t) for t in tasks], "subs": [sub_out(s) for s in subs], "defaults": defaults_out(c)}
@@ -207,19 +229,8 @@ def task_history(task_id: str, user: User = Depends(estimators), db: Session = D
 
 @router.post("/tasks/starter")
 def load_starter(user: User = Depends(gm_only), db: Session = Depends(get_db)):
-    """Add the starter list. Names already in the library are skipped."""
-    existing = list(db.scalars(select(TaskTemplate).where(TaskTemplate.company_id == user.company_id)))
-    taken = {n.lower() for t in existing for n in [t.name, *t.aliases.split("\n")] if n}
-    added = 0
-    for name, aliases, ttype, kind in STARTER_TASKS:
-        free = [a for a in aliases if a.lower() not in taken]
-        if name.lower() in taken:
-            continue
-        unit, coats = STARTER_UNITS.get(name, ("hr", None))
-        db.add(TaskTemplate(company_id=user.company_id, created_by_id=user.id, name=name, aliases="\n".join(free),
-                            task_type=ttype, kind=kind, unit=unit, coats=coats))
-        taken |= {name.lower(), *(a.lower() for a in free)}
-        added += 1
+    """Add the starter list (or the tasks added to it since). Names already in the library are skipped."""
+    added = add_starter(db, user)
     if added:
         log(db, user, "library", user.company_id, f"Loaded the starter task list ({added} tasks)")
     db.commit()

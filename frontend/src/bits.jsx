@@ -117,13 +117,97 @@ function prettyLink(url) {
   }
 }
 
+// The company's Google Drive folder (Settings), for the "Open Google Drive" button.
+let driveUrl = "";
+export const setDriveUrl = (u) => {
+  driveUrl = u || "";
+};
+
 export function LinksField({ value, onChange, id }) {
   return (
-    <label htmlFor={id}>
-      Plans &amp; documents
-      <span className="help field-help">Paste share links (Google Drive, Dropbox), one per line.</span>
+    <div className="links-field">
+      <label htmlFor={id}>
+        Plans &amp; documents
+        <span className="help field-help">
+          Open Google Drive, find the file, tap Share → Copy link, and paste it here. One link per line.
+        </span>
+      </label>
       <textarea id={id} rows={3} value={value} onChange={(e) => onChange(e.target.value)} placeholder="https://drive.google.com/…" />
-    </label>
+      <a className="btn-ghost drive-btn" href={driveUrl || "https://drive.google.com/"} target="_blank" rel="noopener noreferrer">
+        Open Google Drive
+      </a>
+    </div>
+  );
+}
+
+// Enter in a box moves on instead of saving the whole form (a save on an
+// estimate makes a new version). Saving takes the Save button.
+export function noEnterSubmit(e) {
+  const t = e.target;
+  if (e.key === "Enter" && t.tagName === "INPUT" && !["submit", "button", "checkbox", "radio"].includes(t.type)) {
+    e.preventDefault();
+    const fields = [...e.currentTarget.querySelectorAll("input:not([type=hidden]):not([disabled]), select, textarea")];
+    fields[fields.indexOf(t) + 1]?.focus();
+  }
+}
+
+/* ---------- addresses: street, city, state, ZIP ---------- */
+
+const PARTS = ["street", "city", "state", "zip"];
+
+// "100 Main St, Stuart, FL 34994": the one-line version, as the server builds it.
+export function composeAddress(a) {
+  const region = [a.state, a.zip].map((x) => (x ?? "").trim()).filter(Boolean).join(" ");
+  const place = [(a.city ?? "").trim(), region].filter(Boolean).join(", ");
+  return [(a.street ?? "").trim(), place].filter(Boolean).join(", ");
+}
+
+// Address parts from a saved record: its own parts, or an old one-line
+// address split as well as it can be ("Street, City, ST 12345").
+export function addressFrom(rec, prefix, line) {
+  const parts = Object.fromEntries(PARTS.map((p) => [p, rec?.[`${prefix}_${p}`] ?? ""]));
+  if (PARTS.some((p) => parts[p]) || !line) return parts;
+  const m = line.trim().match(/^(.*?),\s*([^,]+?),\s*([A-Za-z]{2})\.?\s*(\d{5}(?:-\d{4})?)?$/);
+  return m ? { street: m[1], city: m[2], state: m[3].toUpperCase(), zip: m[4] ?? "" } : { street: line.trim(), city: "", state: "", zip: "" };
+}
+
+// What to send: the parts under their prefix and the one-line version.
+export const addressBody = (a, prefix, lineKey) => ({
+  ...Object.fromEntries(PARTS.map((p) => [`${prefix}_${p}`, (a?.[p] ?? "").trim()])),
+  [lineKey]: composeAddress(a ?? {}),
+});
+
+export const blankAddress = () => ({ street: "", city: "", state: "FL", zip: "" });
+
+/* Street, city, state and ZIP boxes. The autocomplete names let a phone or
+   browser fill in an address it already knows. `section` keeps a billing
+   address and a site address apart when both are on one page. */
+export function AddressFields({ value, onChange, section = "site", legend }) {
+  const a = value ?? blankAddress();
+  const set = (k, v) => onChange({ ...a, [k]: v });
+  const ac = (f) => `section-${section} ${f}`;
+  return (
+    <fieldset className="address">
+      {legend && <legend>{legend}</legend>}
+      <label className="addr-street">
+        Street address
+        <input value={a.street} onChange={(e) => set("street", e.target.value)} autoComplete={ac("street-address")} placeholder="123 Main St" />
+      </label>
+      <div className="addr-row">
+        <label className="addr-city">
+          City
+          <input value={a.city} onChange={(e) => set("city", e.target.value)} autoComplete={ac("address-level2")} />
+        </label>
+        <label className="addr-state">
+          State
+          <input value={a.state} onChange={(e) => set("state", e.target.value.toUpperCase())} autoComplete={ac("address-level1")} maxLength={2} />
+        </label>
+        <label className="addr-zip">
+          ZIP
+          <input value={a.zip} onChange={(e) => set("zip", e.target.value.replace(/[^\d-]/g, ""))} autoComplete={ac("postal-code")} inputMode="numeric" maxLength={10} />
+        </label>
+      </div>
+    </fieldset>
   );
 }
 

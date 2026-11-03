@@ -11,6 +11,7 @@ import EstimatesView from "./EstimatesView";
 import ClientsView from "./ClientsView";
 import SettingsView from "./SettingsView";
 import LibraryView from "./LibraryView";
+import { setDriveUrl } from "./bits";
 
 const ME_KEY = "cf.me";
 // Sample sign-ins: shown in the preview and in local development only.
@@ -173,6 +174,7 @@ const inviteToken = () => location.pathname.match(/^\/invite\/([\w-]+)$/)?.[1] ?
 
 export default function App() {
   const [me, setMe] = useState(() => (getToken() ? safeGet(ME_KEY) : null));
+  setDriveUrl(me?.drive_url); // the "Open Google Drive" button next to link boxes
   const [mode, setMode] = useState(null);
   const [invite, setInvite] = useState(inviteToken);
   // Jump to another tab and open something there, e.g. a lead's estimate.

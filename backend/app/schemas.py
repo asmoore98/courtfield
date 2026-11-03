@@ -6,9 +6,10 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
 from .models import CostCategory, CourtType, JobStatus, Role, ScopeType, TaskKind, TaskType
+from .addresses import fill
 from .quantities import worked_hours
 
-Unit = Literal["hr", "sf", "sf_coat", "lf", "sy", "cy", "ton", "ea", "ls"]
+Unit = Literal["hr", "sf", "sf_coat", "lf", "sy", "cy", "ton", "acre", "ea", "ls"]
 Follows = Literal["", "surface", "paint", "courts"]
 
 
@@ -43,6 +44,7 @@ class MeOut(UserOut):
     manages_stock: bool = False
     edits_prices: bool = False
     sees_locations: bool = False
+    drive_url: str = ""  # the company's Google Drive folder, for the "Open Drive" button
     location_notice_at: datetime | None = None
 
     @field_serializer("location_notice_at")
@@ -74,6 +76,8 @@ class TaskIn(BaseModel):
     production_rate: float | None = Field(default=None, ge=0, le=1_000_000)
     unit_price: float | None = Field(default=None, ge=0, le=1_000_000)
     follows: Follows = ""  # estimates only: quantity comes from the court size
+    checklist_note: str = Field(default="", max_length=2000)  # estimates only: what sales said about this work
+    crew_size: int | None = Field(default=None, ge=1, le=100)  # people on it; estimated_hours is all of them together
 
     @model_validator(mode="after")
     def _hours(self):
@@ -103,6 +107,7 @@ class TaskOut(ORM):
     coats: float | None = None
     production_rate: float | None = None
     unit_price: float | None = None
+    crew_size: int | None = None
 
 
 class CostLineIn(BaseModel):
@@ -140,6 +145,10 @@ class JobIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     client: str = ""
     address: str = Field(default="", max_length=300)
+    site_street: str = Field(default="", max_length=200)
+    site_city: str = Field(default="", max_length=100)
+    site_state: str = Field(default="", max_length=40)
+    site_zip: str = Field(default="", max_length=10)
     parcel_id: str = Field(default="", max_length=60)
     lat: float | None = Field(default=None, ge=-90, le=90)
     lng: float | None = Field(default=None, ge=-180, le=180)
@@ -151,6 +160,10 @@ class JobIn(BaseModel):
     sales_tax_pct: float = Field(default=0, ge=0, le=20)
     tasks: list[TaskIn] = Field(default=[], max_length=100)
     cost_lines: list[CostLineIn] = Field(default=[], max_length=300)
+
+    @model_validator(mode="after")
+    def _address(self):
+        return fill(self, "site", "address")
 
 
 class JobUpdate(JobIn):
@@ -175,6 +188,10 @@ class JobOut(ORM):
     name: str
     client: str
     address: str
+    site_street: str = ""
+    site_city: str = ""
+    site_state: str = ""
+    site_zip: str = ""
     parcel_id: str = ""
     lat: float | None
     lng: float | None

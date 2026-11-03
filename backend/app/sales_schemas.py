@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from .addresses import fill
 from .models import CourtType, EstimateStatus, LeadStatus, ScopeType, TaskKind
 from .quantities import material_qty, worked_hours
 from .schemas import CostLineIn, TaskIn
@@ -17,8 +18,16 @@ class ClientIn(BaseModel):
     phone: str = Field(default="", max_length=40)
     email: str = Field(default="", max_length=254)
     billing_address: str = Field(default="", max_length=300)
+    billing_street: str = Field(default="", max_length=200)
+    billing_city: str = Field(default="", max_length=100)
+    billing_state: str = Field(default="", max_length=40)
+    billing_zip: str = Field(default="", max_length=10)
     notes: str = Field(default="", max_length=LONG)
     links: str = Field(default="", max_length=LONG)
+
+    @model_validator(mode="after")
+    def _address(self):
+        return fill(self, "billing", "billing_address")
 
 
 class ClientActiveIn(BaseModel):
@@ -78,6 +87,10 @@ class LeadIn(BaseModel):
     client_id: str
     name: str = Field(min_length=1, max_length=200)
     site_address: str = Field(default="", max_length=300)
+    site_street: str = Field(default="", max_length=200)
+    site_city: str = Field(default="", max_length=100)
+    site_state: str = Field(default="", max_length=40)
+    site_zip: str = Field(default="", max_length=10)
     parcel_id: str = Field(default="", max_length=60)
     court_type: CourtType | None = None
     scope_type: ScopeType | None = None
@@ -86,6 +99,10 @@ class LeadIn(BaseModel):
     bid_due: date | None = None
     salesperson_id: str | None = None
     survey: SiteSurvey | None = None  # None keeps what's saved
+
+    @model_validator(mode="after")
+    def _address(self):
+        return fill(self, "site", "site_address")
 
 
 class LeadStatusIn(BaseModel):
@@ -116,6 +133,10 @@ class EstimateData(BaseModel):
     adjustment_reason: str = Field(default="", max_length=1000)
 
     site_address: str = Field(default="", max_length=300)
+    site_street: str = Field(default="", max_length=200)
+    site_city: str = Field(default="", max_length=100)
+    site_state: str = Field(default="", max_length=40)
+    site_zip: str = Field(default="", max_length=10)
     parcel_id: str = Field(default="", max_length=60)
     lat: float | None = Field(default=None, ge=-90, le=90)
     lng: float | None = Field(default=None, ge=-180, le=180)
@@ -131,6 +152,11 @@ class EstimateData(BaseModel):
     exclusions: str = Field(default="", max_length=LONG)   # proposal: what's not included
     links: str = Field(default="", max_length=LONG)        # plans, photos: shared-drive links
     notes: str = Field(default="", max_length=LONG)        # internal only, never on the proposal
+    customer_notes: str = Field(default="", max_length=LONG)  # prints on the proposal
+
+    @model_validator(mode="after")
+    def _address(self):
+        return fill(self, "site", "site_address")
 
     @model_validator(mode="after")
     def _from_court(self):
@@ -174,6 +200,8 @@ class EstimateIn(BaseModel):
 class EstimateStatusIn(BaseModel):
     status: EstimateStatus
     note: str = Field(default="", max_length=1000)
+    # Marking it sent: whoever does it has read what the customer will see.
+    checked_customer_text: bool = False
 
 
 class NoteIn(BaseModel):

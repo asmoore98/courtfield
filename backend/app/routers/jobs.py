@@ -51,10 +51,10 @@ def check_task_refs(db: Session, tasks, company_id: str) -> None:
 def task_fields(t) -> dict:
     """What gets stored for a task. Sub tasks have no crew hours."""
     from ..models import TaskKind
-    f = t.model_dump(exclude={"id", "sort_order", "markup_pct", "follows"})  # markups and court links live on the estimate
+    f = t.model_dump(exclude={"id", "sort_order", "markup_pct", "follows", "checklist_note"})  # markups and court links live on the estimate
     if t.kind == TaskKind.sub:
         f["estimated_hours"] = 0.0
-        f.update(unit="hr", quantity=None, coats=None, production_rate=None, unit_price=None)
+        f.update(unit="hr", quantity=None, coats=None, production_rate=None, unit_price=None, crew_size=None)
     else:
         f["sub_id"], f["sub_price"], f["sub_quote_link"] = None, None, ""
     return f

@@ -250,6 +250,7 @@ def _seed_sales(db, co, users) -> None:
         job.client_id = clients[job.client].id
     harbor = Client(company_id=co.id, name="Harbor Pointe Apartments (sample)", contact_name="Dana Ruiz",
                     phone="(555) 010-0144", email="manager@harborpointe.example", billing_address="100 Sample Way, Stuart, FL 34994",
+                    billing_street="100 Sample Way", billing_city="Stuart", billing_state="FL", billing_zip="34994",
                     created_by_id=sales.id)
     db.add(harbor)
     db.flush()
@@ -268,7 +269,8 @@ def _seed_sales(db, co, users) -> None:
                           "nets": "yes", "net_type": "Tennis", "net_count": 2, "posts": "no", "water": "yes", "power": "yes",
                           "truck_access": "yes", "photos": "yes"}}
     db.add(Lead(company_id=co.id, client_id=clients["Seabreeze Club (sample)"].id, name="Seabreeze – resurface 2 tennis courts",
-                site_address="200 Sample Rd, Jupiter, FL 33458", court_type=CourtType.tennis, scope_type=ScopeType.resurfacing,
+                site_address="200 Sample Rd, Jupiter, FL 33458", site_street="200 Sample Rd", site_city="Jupiter", site_state="FL",
+                site_zip="33458", court_type=CourtType.tennis, scope_type=ScopeType.resurfacing,
                 description="Board wants pickleball lines added on both courts. Cracks along the north side.",
                 survey=json.dumps(survey), salesperson_id=sales.id, created_by_id=sales.id))
     db.flush()
@@ -328,12 +330,15 @@ def _seed_library(db, co, users) -> None:
     gm = users["dev-gm"]
     co.default_cost_rate, co.default_charge_rate = 34.0, 68.0
     co.markup_material, co.markup_equipment, co.markup_subcontractor, co.markup_other = 20.0, 15.0, 10.0, 10.0
-    sample_rates = {"Rough grading": (95.0, 175.0), "Clearing and grubbing": (90.0, 165.0), "Fine grading": (85.0, 160.0),
+    sample_rates = {"Rough grading": (95.0, 175.0), "Clearing and grubbing, light brush": (90.0, 165.0), "Fine grading": (85.0, 160.0),
                     "Pressure wash": (38.0, 75.0), "Broom clean": (30.0, 55.0)}
     # Made-up production rates and prices per unit, to show how they work.
     sample_units = {"Pressure wash": (900.0, 0.07), "Crack fill": (40.0, 1.4), "Acrylic resurfacer": (500.0, 0.11),
                     "Color coat": (600.0, 0.09), "Line painting": (6.0, 330.0), "Install nets and center straps": (1.0, 60.0),
-                    "Install net posts": (2.5, 140.0), "Low-spot patch": (25.0, 2.2)}
+                    "Install net posts": (2.5, 140.0), "Low-spot patch": (25.0, 2.2),
+                    # per acre: hours an acre, price an acre (made up)
+                    "Clearing and grubbing, grass": (6.0, 1500.0), "Clearing and grubbing, light brush": (12.0, 3500.0),
+                    "Clearing and grubbing, heavy woods": (30.0, 7500.0), "Rough grading": (16.0, 4000.0), "Fine grading": (10.0, 2500.0)}
     for name, aliases, ttype, kind in STARTER_TASKS:
         cost, charge = sample_rates.get(name, (None, None))
         unit, coats = STARTER_UNITS.get(name, ("hr", None))

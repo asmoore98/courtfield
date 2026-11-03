@@ -6,6 +6,65 @@ To undo a whole batch after it's merged: open its pull request on GitHub and cli
 
 ---
 
+## v0.5.1 — Batch 3.1: Lead fixes, checklist by court type, photos, hand-off to estimating
+
+**Date:** November 3, 2026 · **Branch:** `drew/batch3.1-lead-fixes` · **By:** Drew Moore
+
+Fixes from going through a lead and an estimate on the phone, photos straight from the camera roll, and a clean hand-off from sales to the estimators.
+
+### What changed
+
+| Change | Why | Where |
+|---|---|---|
+| **Addresses in parts:** street, city, state (FL to start) and ZIP on leads, clients (billing), estimates and jobs. Phones and browsers can fill them in. The one-line address is still built for lists, the map pin and the proposal. Old one-line addresses are split the first time they're edited | Neater, and the address carries from lead to estimate to job without retyping | `addresses.py`, `AddressFields` in `bits.jsx` |
+| **"Other" opens a box** to say what it is, on every choice that has Other (surface, net type, goal type, fence height…) | "Other" on its own tells the estimator nothing | `checklists.py` (`_with_other_boxes`), `Checklist.jsx` |
+| **"+ Add a note"** under every checklist question. Notes show on the lead, in the estimator's view, and in the history | Room for the details a yes/no can't hold | `Checklist.jsx`, `tidy()` in `checklists.py` |
+| **Questions follow the court type:** net and post questions only for tennis, pickleball and multi-court; a **Basketball goals** section only for basketball and multi-court. With no court type picked yet, everything shows. Basketball estimates no longer start with net tasks | No questions that don't apply | `checklists.py`, `starterTasks` in `JobEditor.jsx` |
+| **Replace or install new:** goals, net posts, fence and windscreen ask whether it's replacing what's there or new. Replace adds the tear-out to the estimate (goal removal, post removal, fence removal, windscreen removal) and asks follow-ups (old goals in concrete? post sleeves OK?). Fence asks repair, replace or new | Tearing out costs more; the bid has to show it | `checklists.py`, `tasksFromChecklist` in `Checklist.jsx` |
+| Four new starter tasks: Net post removal, Basketball goal removal, Fence removal, Windscreen removal | For the tear-out work | `library_starter.py` |
+| **Photos on leads and estimates:** Add photos picks from the camera roll (or takes one). Each is shrunk on the phone first (about 0.3 MB) so it uploads fast. On a new lead they upload when it's saved. Tap one to see it full size, save it, or remove it (with a reason; it's kept and in the history). The estimate shows the lead's photos. Kept in the app's database for now; ready to move to the company Google Drive later | Sales shouldn't have to upload to Drive and paste links | `routers/photos.py`, `Photos.jsx`, `models.py` (`Photo`) |
+| **Open Google Drive** button next to every link box. It opens the company Drive folder set in **Settings → Google Drive** (or Drive's home page), then you copy the share link and paste it | Faster than hunting for Drive in another app | `LinksField` in `bits.jsx`, `SettingsView.jsx` |
+| **Send to estimating:** sales taps it on the lead when it's wrapped up (unanswered checklist questions are listed first). The Estimates tab shows **New leads to be estimated**, oldest first, with how much of the checklist is done. The Leads tab shows which leads haven't been sent. Sales can take a lead back until an estimate is started | Sales and estimating are different people | `routers/leads.py`, `LeadsView.jsx`, `EstimatesView.jsx` |
+| **Enter doesn't save** a lead, estimate or client any more; it moves to the next box. Saving takes the Save button | Every accidental Enter was making a new estimate version | `noEnterSubmit` in `bits.jsx` |
+| **The starter task list is there from the start:** a company's library fills itself the first time it's opened | The phone showed an empty list until someone tapped Load | `routers/library.py` |
+| **Our cost vs. customer price** on every crew task, in two labeled boxes. Price per unit (or per hour) and markup are in the customer box; crew hours and cost per hour in ours. The production rate hides behind "Work out the hours from a production rate" until it's used | Nobody could tell which numbers were ours and which were the customer's | `TaskRow` in `JobEditor.jsx` |
+| **What sales said shows on the task** the checklist added ("What's there now? Light brush · How much of the land needs clearing: 0.75 acres") | The estimator sees the reason next to the work | `tasksFromChecklist` in `Checklist.jsx` |
+| Checklist tasks land **in work order** (site work, drainage, the slab, prep, coatings, lines…) | The slab was showing up after the color coats | `Checklist.jsx` |
+| **Clearing by the acre** in three levels: grass, light brush, heavy woods. Rough and fine grading by the acre too. The new-construction checklist asks what's there and **how much of the land needs clearing and grading** (court area or the whole lot) | That's how clearing is priced, and the lot can be far bigger than the courts | `library_starter.py`, `checklists.py` |
+| **Lighting:** "About how far is the nearest electrical service from the court?" | Power a quarter mile away is a big part of the price | `checklists.py` |
+| **Buildings** (concession stand, restrooms, storage, pavilion, office): have plans → get the plans and their permit status. No plans → size, construction, roof, matching, location, restroom fixtures, concession food and equipment, storage, pavilion, water, sewer and power distances, A/C, extras, budget, and whether we get plans drawn. Adds Building construction and, without plans, Building plans and engineering | Plans cost money; ask everything once | `checklists.py`, `library_starter.py` |
+| **Permit and city fees:** a Fee line passes through at cost, with no markup and no whole-job markup. Adding a permits task adds a fee line for it. The proposal lists each fee as included in the price | The customer sees we've covered the fees, not that they'll owe them on top | `routers/estimates.py`, `JobEditor.jsx`, `ProposalView.jsx` |
+| **Notes at the bottom of the estimate:** internal notes (never printed) and notes for the customer (printed, marked in orange) | One place for extras, with the two kept apart | `EstimatesView.jsx` |
+| **Read before it's sent:** "Mark sent" and "Re-send" show everything the customer will read (price, fees, scope, work, exclusions, customer notes) and need a tick. The server refuses a send without it | A note meant for the office never goes to the customer | `SendReview` in `EstimatesView.jsx`, `routers/estimates.py` |
+| "Flood test" is now "Flood test (find low spots)": flooding the court to find birdbaths before coating | Plain names | `library_starter.py` |
+| **People × hours:** a crew task asks how many people and how many hours to finish (4 people for 8 hours = 32 labor hours). Labor hours are what's compared with the time clocked on the job. Saved on the estimate and the job | "Crew hours" read as clock hours, not everyone's hours together | `TaskRow` in `JobEditor.jsx`, `JobTask.crew_size` |
+| **Materials on the task:** "+ Add material", "+ Add equipment" and "+ Other cost" right on the task. Each task shows its total: our cost, customer price and margin with its materials in. The bottom list is for whole-job costs. Every line has a clear **Remove** button, and a line added by mistake and left blank is dropped on save | Base rock showed a 2,000% markup because the rock wasn't on the task | `JobEditor.jsx` |
+| **Customer price stands out** on every task: the labor price in big blue in the customer box, and the task total at the bottom of the card | See what each task charges without hunting | `JobEditor.jsx`, `styles.css` |
+| **+ between the arrows** adds a task right below that one | No scrolling to the bottom and back | `JobEditor.jsx` |
+| **Court slab in its parts:** forms, vapor barrier, rebar and mesh, pour and place, finish. Post-tensioned is gone; the checklist asks Asphalt or Concrete. **Sidewalks and flatwork** has its own question. Buildings get their own type of work, with **Building slab and footings** | A slab is bid by its parts; a court finish isn't a building pad | `library_starter.py`, `checklists.py` |
+| **Buildings:** right after which buildings, it asks one building or separate (and how many). One building gets length and width; separate ones get each building's size. Men's and women's restrooms ask toilets in each and urinals in the men's | Two buildings is a very different job from one | `checklists.py` |
+| Typing ".5" keeps the decimal (it shows 0.5) | It was turning into 5 | `NumInput.jsx` |
+| The production-rate box no longer vanishes when it's cleared to retype | Backspacing one too many lost the box | `JobEditor.jsx` |
+| Tests: 7 new (court types, Other and notes, addresses through to the job, photos and who can see or remove them, the Drive link, fees at cost and on the proposal, the read-before-send check, the hand-off, notes on tasks) | Keep it working | `tests/test_units_checklist.py`, `tests/test_library.py`, `tests/test_estimates.py` |
+
+### Database change
+
+Migration `c7e19a4d2b55`: street, city, state and ZIP columns on `jobs`, `leads` and `clients`; `drive_folder_url` on `companies`; a new `photos` table; `sent_at` and `sent_by_id` on `leads`; a new "fee" kind of cost line; `crew_size` on job tasks; a "building" type of work. Nothing existing changes. Tested up, down and up on Postgres with data.
+
+**Storage:** photos live in the Postgres database for now. Check the Render database plan's storage; at about 0.3 MB a photo, 1 GB holds roughly 3,000 photos. When the company Google Drive is connected, they move there.
+
+### After it goes live
+
+1. GM: **Library → Tasks → Load the starter list** again to add the new tasks (tear-outs, clearing levels, buildings). Tasks already there are skipped. If the library was empty, it fills itself.
+2. GM: set prices per acre on the clearing levels and grading (Library → tap the task).
+3. GM: **Settings → Google Drive**: paste the company's Drive folder link.
+
+### How to undo
+
+- **Everything:** revert this pull request on GitHub. To remove the new columns and the photos table, run `alembic downgrade b41d7e2c9a10` from the Render Shell (deletes any photos added).
+
+---
+
 ## v0.5.0 — Batch 3: Task library, per-task rates, subs, built prices, site checklist
 
 **Date:** October 29, 2026 · **Branch:** `drew/batch3-library` · **By:** Drew Moore

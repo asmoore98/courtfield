@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
 import { blankClient } from "./ClientPicker";
-import { ActivityList, LEAD_STATUS, LinkList, LinksField, NoteAction, Restored, StatusChip, money0, useApi, useDraft, useScreen } from "./bits";
+import { ActivityList, AddressFields, LEAD_STATUS, addressBody, addressFrom, noEnterSubmit, LinkList, LinksField, NoteAction, Restored, StatusChip, money0, useApi, useDraft, useScreen } from "./bits";
 
 const SCREEN_KEY = "cf.clients.screen";
 const JOB_STATUS = { scheduled: "Scheduled", active: "In progress", complete: "Complete" };
@@ -217,7 +217,10 @@ function ClientForm({ clientId, onDone, onCancel }) {
     if (!clientId || d.restoredAt) return;
     api(`/api/clients/${clientId}`)
       .then((c) => {
-        d.discard({ ...blankForm(), ...Object.fromEntries(Object.keys(blankForm()).map((k) => [k, c[k] ?? ""])) });
+        d.discard({
+          ...blankForm(), ...Object.fromEntries(Object.keys(blankForm()).map((k) => [k, c[k] ?? ""])),
+          billing: addressFrom(c, "billing", c.billing_address),
+        });
         setLoaded(true);
       })
       .catch((e) => setError(e.message));
@@ -231,7 +234,8 @@ function ClientForm({ clientId, onDone, onCancel }) {
     if (!f.name.trim()) return setError("Give the client a name.");
     setSaving(true);
     try {
-      const body = { ...f, name: f.name.trim() };
+      const { billing, ...rest } = f;
+      const body = { ...rest, name: f.name.trim(), ...addressBody(billing ?? addressFrom({}, "billing", f.billing_address), "billing", "billing_address") };
       const saved = clientId ? await api(`/api/clients/${clientId}`, { method: "PUT", body }) : await api("/api/clients", { method: "POST", body });
       d.done();
       onDone(saved.id);
@@ -242,7 +246,7 @@ function ClientForm({ clientId, onDone, onCancel }) {
   }
 
   return (
-    <form className="editor" onSubmit={save}>
+    <form className="editor" onSubmit={save} onKeyDown={noEnterSubmit}>
       <button type="button" className="link back" onClick={onCancel}>
         {clientId ? "Back to client" : "All clients"}
       </button>
@@ -276,10 +280,9 @@ function ClientForm({ clientId, onDone, onCancel }) {
             Email
             <input type="email" value={f.email} onChange={(e) => d.set("email", e.target.value)} autoCapitalize="none" />
           </label>
-          <label className="span-2">
-            Billing address
-            <input value={f.billing_address} onChange={(e) => d.set("billing_address", e.target.value)} />
-          </label>
+          <div className="span-2">
+            <AddressFields section="billing" legend="Billing address" value={f.billing ?? addressFrom({}, "billing", f.billing_address)} onChange={(v) => d.set("billing", v)} />
+          </div>
           <label className="span-2">
             Notes
             <textarea rows={3} value={f.notes} onChange={(e) => d.set("notes", e.target.value)} />

@@ -4,18 +4,24 @@ What's planned and what's parked for later. Newest ideas get added at the bottom
 
 ## Next up
 
-1. **Batch 4: Material library**
+1. **Batch 4: Built-up tasks and the material library**
+   - A task holds all its parts: crew hours, machine time (e.g. 45 min per 20-ton load at $150/hr), materials and fees, plus a markup, as one price. Some tasks are simply priced by the unit (acres × price per acre); others are built up. The estimator picks per task
+   - Base rock and fill by length × width × depth: works out cubic yards and tons, the material cost and the spreading time
+   - Starter material list with average prices (concrete, rebar, base rock, sand, asphalt, acrylics, posts, nets, fence) to fix in the library later
+   - Tasks bring their materials: pour concrete → concrete; color coat → color concentrate
    - Materials get the same search and naming rules as tasks (other names, one name per item); today the price list is searchable by name only
    - Coverage saved with each material (today it's typed on the estimate line; court size and the math already work)
    - Tasks suggest their materials (paint task → add paint, then pick type, color, amount)
-2. **Batch 5: Documents and insurance**
-   - Real file uploads for plans (needs file storage; Google Drive links are the placeholder until then)
+2. **Building construction broken down** (when they start bidding buildings): footings, block or framing, roof, doors and windows, plumbing rough-in and fixtures, electrical, HVAC, finishes, each with its own tasks and materials. And the estimate's task list grouped into Site work, Court and Buildings
+3. **Batch 5: Documents and insurance**
+   - Connect the company Google Drive: photos go to a Drive folder per lead instead of the database (move the ones already in the app), and pick a file from Drive inside the app instead of copying its link. Needs a Google Cloud project on the company Google account (Drew gets access when his dad starts)
+   - Real file uploads for plans and documents (PDFs), to the same Drive
    - Insurance certs: ours naming a client (kept with the client), subs' naming us (kept with the sub)
    - Expiration alerts to the GM / PM before a cert runs out
 
 ## Down the road
 
-- **Scheduling and material planning for a big job list.** The company has ~17 open jobs and 60+ on backorder. Needs a way to see active vs. upcoming jobs at a glance, schedule crews and dates, and plan material purchasing and deliveries so no job is missed and material is ordered and on site on time
+- **Scheduling and material planning for a big job list.** The company has ~17 open jobs and 60+ on backorder. Needs a way to see active vs. upcoming jobs at a glance, schedule crews and dates, and plan material purchasing and deliveries so no job is missed and material is ordered and on site on time. They schedule in a Gantt program today (name to confirm, possibly GanttPRO): import their current schedule, keep the layout familiar, and work out whether the app replaces it or syncs with it. Need an export (Excel/CSV or MS Project XML) to see how it's set up
   - Creating a job puts it on the calendar: set a start date (and expected end) as part of creating it
   - Interactive schedule of active and upcoming jobs showing when each starts and ends. With this many jobs at once it has to be streamlined and simple, but still carry the info that matters (crew, dates, status, material ready or not). Details to be worked out together
   - Assign crews when a job goes on the calendar. The crew assignment carries over to the Field tab

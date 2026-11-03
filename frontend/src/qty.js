@@ -15,10 +15,11 @@ export const UNITS = [
   ["sy", "Square yards (SY)"],
   ["cy", "Cubic yards (CY)"],
   ["ton", "Tons"],
+  ["acre", "Acres"],
   ["ea", "Each"],
   ["ls", "Lump sum"],
 ];
-export const UNIT_SHORT = { hr: "hr", sf: "SF", sf_coat: "SF", lf: "LF", sy: "SY", cy: "CY", ton: "ton", ea: "ea", ls: "job" };
+export const UNIT_SHORT = { hr: "hr", sf: "SF", sf_coat: "SF", lf: "LF", sy: "SY", cy: "CY", ton: "ton", acre: "acre", ea: "ea", ls: "job" };
 export const PER_HOUR = new Set(["sf", "sf_coat", "lf", "sy"]);
 
 const n = (v) => (v === "" || v == null ? 0 : Number(v));
