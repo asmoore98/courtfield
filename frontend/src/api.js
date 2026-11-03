@@ -63,6 +63,21 @@ export async function api(path, { method = "GET", body } = {}) {
   return res.json();
 }
 
+// A file from the API (a photo) as a blob, with the sign-in attached.
+export async function fetchBlob(path) {
+  let res;
+  try {
+    res = await fetch(path, { headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {} });
+  } catch {
+    throw new ApiError(0, "No connection");
+  }
+  if (!res.ok) {
+    checkSignedOut(res.status, path);
+    throw new ApiError(res.status, "Couldn't load it");
+  }
+  return res.blob();
+}
+
 // Save a file from the API (e.g. a CSV) to the device.
 export async function download(path, filename) {
   let res;

@@ -51,6 +51,7 @@ export const TASK_TYPE_LABEL = {
   turf: "Turf",
   drainage: "Drainage",
   cleanup: "Cleanup",
+  building: "Buildings",
   other: "Other",
 };
 export const TASK_TYPES = Object.entries(TASK_TYPE_LABEL);

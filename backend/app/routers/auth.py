@@ -22,6 +22,7 @@ def me_out(db: Session, user: User) -> MeOut:
         estimates=user.role in auth.ESTIMATES, sales_side=user.role in auth.SALES_SIDE,
         manages_stock=user.role in auth.MANAGES_STOCK, edits_prices=user.role in auth.EDITS_PRICES,
         sees_locations=user.role in auth.SEES_LOCATIONS, location_notice_at=user.location_notice_at,
+        drive_url=company.drive_folder_url or "",
     )
 
 

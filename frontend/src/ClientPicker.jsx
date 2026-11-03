@@ -2,8 +2,9 @@
 // The new client is created when the lead or estimate is saved (saveClient).
 import { useEffect, useState } from "react";
 import { api } from "./api";
+import { AddressFields, addressBody, blankAddress } from "./bits";
 
-export const blankClient = () => ({ name: "", contact_name: "", phone: "", email: "", billing_address: "" });
+export const blankClient = () => ({ name: "", contact_name: "", phone: "", email: "", billing_address: "", billing: blankAddress() });
 
 export function ClientPicker({ clientId, newClient, onChange, id = "client-pick" }) {
   const [clients, setClients] = useState(null);
@@ -48,10 +49,9 @@ export function ClientPicker({ clientId, newClient, onChange, id = "client-pick"
               Email
               <input type="email" value={nc.email} onChange={(e) => setNc("email", e.target.value)} autoCapitalize="none" />
             </label>
-            <label className="span-2">
-              Billing address
-              <input value={nc.billing_address} onChange={(e) => setNc("billing_address", e.target.value)} />
-            </label>
+            <div className="span-2">
+              <AddressFields section="billing" legend="Billing address" value={nc.billing} onChange={(v) => setNc("billing", v)} />
+            </div>
           </div>
         </fieldset>
       )}
@@ -69,6 +69,7 @@ export async function saveClient(clientId, newClient) {
   // A save that failed after the client was added (no signal, say) shouldn't add them twice.
   const existing = (await api("/api/clients")).find((c) => c.name.toLowerCase() === name.toLowerCase());
   if (existing) return existing.id;
-  const c = await api("/api/clients", { method: "POST", body: { ...newClient, name } });
+  const { billing, ...rest } = newClient;
+  const c = await api("/api/clients", { method: "POST", body: { ...rest, name, ...(billing ? addressBody(billing, "billing", "billing_address") : {}) } });
   return c.id;
 }

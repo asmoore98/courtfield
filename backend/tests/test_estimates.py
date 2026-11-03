@@ -140,7 +140,7 @@ def test_status_follow_up_and_expiry(client):
     c = new_client(client)
     lead = client.post("/api/leads", json={"client_id": c["id"], "name": "TEST Lead"}, headers=auth(SALES)).json()
     e = new_estimate(client, c["id"], lead_id=lead["id"])
-    r = client.post(f"/api/estimates/{e['id']}/status", json={"status": "sent"}, headers=auth(SALES))
+    r = client.post(f"/api/estimates/{e['id']}/status", json={"status": "sent", "checked_customer_text": True}, headers=auth(SALES))
     assert r.json()["status"] == "sent" and r.json()["follow_up"] is None
     assert client.get(f"/api/leads/{lead['id']}", headers=auth(SALES)).json()["status"] == "estimated"
     assert client.post(f"/api/estimates/{e['id']}/status", json={"status": "lost"}, headers=auth(SALES)).status_code == 422  # say why
@@ -157,7 +157,7 @@ def test_status_follow_up_and_expiry(client):
     activity = client.get(f"/api/estimates/{e['id']}", headers=auth(GM)).json()["activity"]
     assert activity[0]["action"] == "Expired" and activity[0]["by"] == "Courtfield (automatic)"
     # re-sending restarts the clock
-    assert client.post(f"/api/estimates/{e['id']}/status", json={"status": "sent", "note": "Revised"}, headers=auth(SALES)).json()["status"] == "sent"
+    assert client.post(f"/api/estimates/{e['id']}/status", json={"status": "sent", "note": "Revised", "checked_customer_text": True}, headers=auth(SALES)).json()["status"] == "sent"
 
 
 def test_won_estimate_becomes_a_job(client):
@@ -207,7 +207,7 @@ def test_lead_follows_its_estimates(client):
     assert lead["outcome"] == "new"
     e = new_estimate(client, c["id"], lead_id=lead["id"], salesperson_id=me_id(client, SALES))
     assert client.get(f"/api/leads/{lead['id']}", headers=auth(SALES)).json()["outcome"] == "estimating"
-    client.post(f"/api/estimates/{e['id']}/status", json={"status": "sent"}, headers=auth(SALES))
+    client.post(f"/api/estimates/{e['id']}/status", json={"status": "sent", "checked_customer_text": True}, headers=auth(SALES))
     assert client.get(f"/api/leads/{lead['id']}", headers=auth(SALES)).json()["outcome"] == "estimated"
     client.post(f"/api/estimates/{e['id']}/status", json={"status": "lost", "note": "Price"}, headers=auth(SALES))
     row = next(l for l in client.get("/api/leads", headers=auth(SALES)).json() if l["id"] == lead["id"])

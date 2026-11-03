@@ -67,14 +67,15 @@ def test_gm_keeps_the_task_list(client):
     assert hist[0]["action"] == "Edited Court cleaning" and "Charge rate" in hist[0]["detail"]
     assert client.patch(f"/api/library/tasks/{tid}/active", json={"active": False}, headers=auth(GM)).json()["active"] is False
     assert client.get("/api/library", headers=auth(SALES)).status_code == 403
-    assert lib(client, OTHER)["tasks"] == []  # another company's library is its own
+    other = lib(client, OTHER)["tasks"]  # another company's library is its own, starting from the starter list
+    assert len(other) > 40 and not any(t["name"] == "Court cleaning" for t in other)
 
 
 def test_starter_list_skips_names_already_there(client):
     assert client.post("/api/library/tasks/starter", headers=auth(EST)).status_code == 403
     assert client.post("/api/library/tasks/starter", headers=auth(GM)).json()["added"] == 0  # sample data already has it
-    r = client.post("/api/library/tasks/starter", headers=auth(OTHER))
-    assert r.json()["added"] > 40
+    # an empty library fills itself with the starter list the first time it's opened
+    assert len(lib(client, OTHER)["tasks"]) > 40
     assert client.post("/api/library/tasks/starter", headers=auth(OTHER)).json()["added"] == 0
 
 

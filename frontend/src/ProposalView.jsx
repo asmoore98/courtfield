@@ -99,9 +99,31 @@ export default function ProposalView({ id, onBack }) {
           </section>
         )}
 
+        {p.notes && (
+          <section>
+            <h3>Notes</h3>
+            <p className="pre">{p.notes}</p>
+          </section>
+        )}
+
         <section className="pr-price">
           <h3>Price</h3>
           <p className="pr-total">{price(p.price)}</p>
+          {p.fees?.length > 0 && (
+            <>
+              <p className="pr-small">The price includes these fees, paid by us on your behalf:</p>
+              <table className="pr-fees">
+                <tbody>
+                  {p.fees.map((f, i) => (
+                    <tr key={i}>
+                      <th scope="row">{f.description}</th>
+                      <td>{price(f.amount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
           <p className="pr-small">
             This proposal is good for {p.valid_days} days, until {fmtDate(p.valid_until)}.
           </p>

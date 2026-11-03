@@ -3,7 +3,7 @@ import { DEMO, api, safeGet, safeSet } from "./api";
 import { getPosition } from "./fieldStore";
 import NumInput from "./NumInput";
 import Picker from "./Picker";
-import { LinkList } from "./bits";
+import { AddressFields, LinkList, addressBody, addressFrom, blankAddress, composeAddress, noEnterSubmit } from "./bits";
 import { TASK_TYPES, TASK_TYPE_LABEL, fromTemplate, reloadLibrary, useLibrary } from "./library";
 import { sameName } from "./search";
 import { CourtSizeFields, blankCourt } from "./Checklist";
@@ -41,11 +41,11 @@ const STARTERS = {
     ["lines", "Line painting"],
   ],
   new_construction: [
-    ["site_work", "Clearing and grubbing"],
+    ["site_work", "Clearing and grubbing, light brush"],
     ["site_work", "Rough grading"],
     ["site_work", "Base rock install"],
     ["site_work", "Fine grading"],
-    ["prep", "Flood test"],
+    ["prep", "Flood test (find low spots)"],
     ["resurfacer", "Acrylic resurfacer"],
     ["color_coat", "Color coat"],
     ["lines", "Line painting"],
@@ -82,6 +82,9 @@ const blankTask = (extra = {}) => ({
   production_rate: "",
   unit_price: "",
   follows: "",
+  checklist_note: "",
+  crew_size: "",
+  site_hours: "",
   ...extra,
 });
 
@@ -92,13 +95,18 @@ export const taskFromLibrary = (name, lib, task_type = "other") => {
 };
 
 // Starter tasks; when the library is loaded they link to its entries and rates.
+// No net work on a basketball court or a turf field.
+const NET_TASKS = ["Install nets and center straps", "Install net posts", "Core drill post sleeves", "Net post removal"];
 export const starterTasks = (court, scope, lib) =>
-  (court === "turf_field" ? TURF_STARTER : STARTERS[scope]).map(([task_type, name]) => taskFromLibrary(name, lib, task_type));
+  (court === "turf_field" ? TURF_STARTER : STARTERS[scope])
+    .filter(([, name]) => !(["basketball", "turf_field"].includes(court) && NET_TASKS.includes(name)))
+    .map(([task_type, name]) => taskFromLibrary(name, lib, task_type));
 
 export const blankJob = (lib) => ({
   name: "",
   client: "",
   address: "",
+  site: blankAddress(),
   parcel_id: "",
   lat: null,
   lng: null,
@@ -116,6 +124,7 @@ export const COST_CATEGORIES = [
   ["equipment", "Equipment"],
   ["subcontractor", "Sub"],
   ["other", "Other"],
+  ["fee", "Fee"],
 ];
 const UNITS = ["pail", "gal", "drum", "bag", "lb", "ton", "SF", "LF", "roll", "each", "set", "day", "week", "hr", "job"];
 const blankLine = (category = "material") => ({
@@ -123,7 +132,7 @@ const blankLine = (category = "material") => ({
   category,
   description: "",
   quantity: "",
-  unit: category === "material" ? "pail" : category === "equipment" ? "day" : "job",
+  unit: category === "material" ? "pail" : category === "equipment" ? "day" : category === "fee" ? "each" : "job",
   unit_cost: "",
   task_key: "",
   in_house: false,
@@ -162,11 +171,15 @@ export function estimateOf(job) {
   const hours = nums.reduce((s, x) => s + x.hours, 0);
   const labor = nums.reduce((s, x) => s + x.cost, 0);
   const m = job.markups ?? {};
-  const cat = { material: 0, equipment: 0, subcontractor: 0, other: 0 };
+  const cat = { material: 0, equipment: 0, subcontractor: 0, other: 0, fee: 0 };
   const charge = { labor: nums.reduce((s, x) => s + x.charge, 0), material: 0, equipment: 0, subcontractor: 0, other: 0 };
   let sales_tax = 0;
   for (const c of job.cost_lines ?? []) {
     const cost = lineQty(c, areas) * n(c.unit_cost);
+    if (c.category === "fee") {
+      cat.fee += cost; // permits and city fees pass through at cost
+      continue;
+    }
     const tax = c.category === "material" ? (cost * n(job.sales_tax_pct)) / 100 : 0;
     cat[c.category] += cost;
     sales_tax += tax;
@@ -176,16 +189,16 @@ export function estimateOf(job) {
     cat.subcontractor += n(t.sub_price);
     charge.subcontractor += n(t.sub_price) * (1 + markupOf(t, "subcontractor", m) / 100);
   }
-  const total_cost = labor + cat.material + sales_tax + cat.equipment + cat.subcontractor + cat.other;
+  const total_cost = labor + cat.material + sales_tax + cat.equipment + cat.subcontractor + cat.other + cat.fee;
   const subtotal = Object.values(charge).reduce((s, v) => s + v, 0);
   const priced = job.priced === "built";
   const overall_markup = priced ? n(job.overall_markup) : 0;
   const overall_amount = (subtotal * overall_markup) / 100;
-  const built_price = subtotal + overall_amount;
+  const built_price = subtotal + overall_amount + cat.fee;
   const contract = priced ? Math.round((built_price + n(job.adjustment)) * 100) / 100 : n(job.contract_amount);
   const profit = contract - total_cost;
   return {
-    hours, labor, ...cat, sales_tax, total_cost, charge, subtotal, overall_markup, overall_amount, built_price,
+    hours, labor, ...cat, fees: cat.fee, sales_tax, total_cost, charge, subtotal, overall_markup, overall_amount, built_price,
     adjustment: priced ? n(job.adjustment) : 0, contract, price: contract, profit,
     margin_pct: contract > 0 ? profit / contract : null, markup_pct: total_cost > 0 ? profit / total_cost : null,
   };
@@ -200,6 +213,7 @@ export function EstimateTable({ est, taxPct, priceLabel = "Contract" }) {
     ["Equipment", est.equipment],
     ["Subcontractors", est.subcontractor],
     ["Other costs", est.other],
+    ["Permit and city fees", est.fee ?? 0],
   ].filter(([, v], i) => i < 2 || v > 0);
   const tone = est.margin_pct == null ? "" : est.profit < 0 ? "t-over" : est.margin_pct < 0.15 ? "t-near" : "t-under";
   return (
@@ -280,8 +294,8 @@ export function PriceTable({ est, taxPct, adjustmentReason }) {
           ))}
           <tr className="est-total">
             <th scope="row">Subtotal</th>
-            <td className="num">{money(est.total_cost)}</td>
-            <td className="num">{est.total_cost > 0 ? pctText(est.subtotal / est.total_cost - 1) : "—"}</td>
+            <td className="num">{money(est.total_cost - (est.fee ?? 0))}</td>
+            <td className="num">{est.total_cost - (est.fee ?? 0) > 0 ? pctText(est.subtotal / (est.total_cost - (est.fee ?? 0)) - 1) : "—"}</td>
             <td className="num">{money(est.subtotal)}</td>
           </tr>
           {est.overall_markup !== 0 && (
@@ -293,6 +307,17 @@ export function PriceTable({ est, taxPct, adjustmentReason }) {
                 {est.overall_amount >= 0 ? "+" : "−"}
                 {money(Math.abs(est.overall_amount))}
               </td>
+            </tr>
+          )}
+          {(est.fee ?? 0) > 0 && (
+            <tr>
+              <th scope="row">
+                Permit and city fees
+                <span className="sub">At cost, no markup. Listed on the proposal.</span>
+              </th>
+              <td className="num">{money(est.fee)}</td>
+              <td className="num">—</td>
+              <td className="num">{money(est.fee)}</td>
             </tr>
           )}
           {est.adjustment !== 0 && (
@@ -344,6 +369,7 @@ export function formFrom(j) {
     ...j,
     parcel_id: j.parcel_id ?? "",
     address: j.address ?? "",
+    site: addressFrom(j, "site", j.address),
     contract_amount: j.contract_amount ?? "",
     estimated_labor_rate: j.estimated_labor_rate ?? "",
     sales_tax_pct: j.sales_tax_pct || "",
@@ -365,6 +391,10 @@ export function formFrom(j) {
         production_rate: t.production_rate ?? "",
         unit_price: t.unit_price ?? "",
         follows: t.follows ?? "",
+        checklist_note: t.checklist_note ?? "",
+        crew_size: t.crew_size ?? "",
+        site_hours: t.crew_size && t.estimated_hours ? String(Math.round((t.estimated_hours / t.crew_size) * 100) / 100) : t.estimated_hours ?? "",
+        fee_added: true, // a saved estimate's fee lines are as the estimator left them
       })
     ),
     cost_lines: (j.cost_lines ?? []).map((c) => ({
@@ -394,7 +424,7 @@ export function scopeBody(f) {
   const areas = courtAreas(f.court);
   return {
     name: f.name.trim(),
-    address: f.address.trim(),
+    ...addressBody(f.site ?? addressFrom({}, "site", f.address), "site", "address"),
     parcel_id: (f.parcel_id ?? "").trim(),
     lat: f.lat === "" ? null : f.lat,
     lng: f.lng === "" ? null : f.lng,
@@ -437,6 +467,8 @@ export function scopeBody(f) {
       production_rate: unit === "hr" ? null : optNum(t.production_rate),
       unit_price: unit === "hr" ? null : optNum(t.unit_price),
       follows: unit === "hr" || !areas ? "" : t.follows ?? "",
+      checklist_note: t.checklist_note ?? "",
+      crew_size: sub || blankNum(t.crew_size) ? null : Math.max(1, Math.round(num(t.crew_size))),
       cost_rate: t.kind === "sub" ? null : optNum(t.cost_rate),
       charge_rate: t.kind === "sub" ? null : optNum(t.charge_rate),
       sub_id: t.kind === "sub" ? t.sub_id || null : null,
@@ -572,7 +604,7 @@ function NewSubForm({ onSaved, onCancel }) {
   );
 }
 
-function TaskRow({ t, i, count, lib, pricing, markups, areas, canAddToLibrary, bad, set, setMany, move, remove, go }) {
+function TaskRow({ t, i, count, lib, pricing, markups, areas, canAddToLibrary, bad, set, setMany, move, remove, insert, go, lines = [], renderLine, onAddLine, lineMoney }) {
   const [showSub, setShowSub] = useState(false);
   const [addingSub, setAddingSub] = useState(false);
   const [libError, setLibError] = useState(null);
@@ -592,6 +624,16 @@ function TaskRow({ t, i, count, lib, pricing, markups, areas, canAddToLibrary, b
   const canFollow = areas ? t.follows || defaultFollows(unit, t.task_type) : "";
   const following = !!(t.follows && areas && areas[t.follows] != null);
   const markup = taskMarkup(t, areas);
+  // Labor hours are everyone's hours together: 4 people for 8 hours is 32.
+  const people = Math.max(1, Math.round(num(t.crew_size)) || 1);
+  const siteHours = blankNum(t.site_hours) || x.worked ? x.hours / people : num(t.site_hours);
+  const linesCost = lines.reduce((s2, [c]) => s2 + lineMoney(c).cost, 0);
+  const linesCharge = lines.reduce((s2, [c]) => s2 + lineMoney(c).charge, 0);
+  const subCharge = isSub ? cost * (1 + markupOf(t, "subcontractor", markups) / 100) : 0;
+  const taskCost = cost + linesCost;
+  const taskCharge = (isSub ? subCharge : charge) + linesCharge;
+  const [showRate, setShowRate] = useState(() => !blankNum(t.production_rate)); // stays open while the rate is retyped
+  const rateShown = showRate || !blankNum(t.production_rate);
 
   async function addToLibrary(name, close) {
     setLibError(null);
@@ -657,6 +699,11 @@ function TaskRow({ t, i, count, lib, pricing, markups, areas, canAddToLibrary, b
             />
           ) : (
             <input value={t.name} onChange={(e) => set("name", e.target.value)} placeholder="Task name" aria-label={`Task ${i + 1} name`} aria-invalid={bad || undefined} />
+          )}
+          {t.checklist_note && (
+            <p className="tr-from-sales">
+              <b>From the site checklist:</b> {t.checklist_note}
+            </p>
           )}
           <span className="tr-badges">
             {linked ? (
@@ -727,10 +774,10 @@ function TaskRow({ t, i, count, lib, pricing, markups, areas, canAddToLibrary, b
                   <NumInput decimals={1} value={t.coats} onChange={(v) => set("coats", v)} placeholder="1" />
                 </label>
               )}
-              {byUnit && (
+              {byUnit && rateShown && (
                 <label>
                   <span className="tr-label">{rateLabel(unit)}</span>
-                  <NumInput decimals={3} value={t.production_rate} onChange={(v) => set("production_rate", v)} placeholder={PER_HOUR.has(unit) ? "per person" : "hrs"} />
+                  <NumInput decimals={3} value={t.production_rate} onChange={(v) => set("production_rate", v)} placeholder={PER_HOUR.has(unit) ? "one person" : "hrs"} />
                 </label>
               )}
               {byUnit && canFollow && (
@@ -749,65 +796,105 @@ function TaskRow({ t, i, count, lib, pricing, markups, areas, canAddToLibrary, b
                   ) : null}
                 </p>
               )}
-            </div>
-            <div className="tr-nums">
-              <label>
-                <span className="tr-label">Hours</span>
-                {x.worked ? (
-                  <span className="tr-calc" title="Worked out from the quantity and production rate">
-                    {fmt(x.hours)} <span className="sub-inline">worked out</span>
-                  </span>
-                ) : (
-                  <NumInput value={t.estimated_hours} onChange={(v) => set("estimated_hours", v)} placeholder="0" />
-                )}
-              </label>
-              <label>
-                <span className="tr-label">Cost / hr</span>
-                <span className="affix">
-                  <span aria-hidden="true">$</span>
-                  <NumInput value={t.cost_rate} onChange={(v) => set("cost_rate", v)} placeholder="0.00" />
-                </span>
-              </label>
-              {pricing && (
-                <>
-                  <label>
-                    <span className="tr-label">Markup</span>
-                    <span className="affix">
-                      <NumInput
-                        decimals={1}
-                        value={markup == null ? "" : String(Math.round(markup * 1000) / 10)}
-                        onChange={(v) => setMany(withMarkup(t, v, areas))}
-                        placeholder={canMarkUp(t, areas) ? "0" : byUnit ? "set qty & cost" : "set cost"}
-                        disabled={!canMarkUp(t, areas)}
-                      />
-                      <span aria-hidden="true">%</span>
-                    </span>
-                  </label>
-                  {byUnit ? (
-                    <label>
-                      <span className="tr-label">Price / {unit === "sf_coat" ? "SF a coat" : short}</span>
-                      <span className="affix">
-                        <span aria-hidden="true">$</span>
-                        <NumInput
-                          decimals={3}
-                          value={t.unit_price}
-                          onChange={(v) => set("unit_price", v)}
-                          placeholder={x.units > 0 && n(t.charge_rate) > 0 ? fmt((x.hours * n(t.charge_rate)) / x.units, 3) : "0.00"}
-                        />
-                      </span>
-                    </label>
-                  ) : (
-                    <label>
-                      <span className="tr-label">Charge / hr</span>
-                      <span className="affix">
-                        <span aria-hidden="true">$</span>
-                        <NumInput value={t.charge_rate} onChange={(v) => set("charge_rate", v)} placeholder="0.00" />
-                      </span>
-                    </label>
-                  )}
-                </>
+              {byUnit && !rateShown && (
+                <button type="button" className="link tr-rate-link" onClick={() => setShowRate(true)}>
+                  Work out the hours from a production rate
+                </button>
               )}
             </div>
+            <div className="tr-groups">
+              <div className="tr-group">
+                <span className="tr-cap">Our cost</span>
+                <div className="tr-pair">
+                  <label>
+                    <span className="tr-label">People on it</span>
+                    <NumInput
+                      decimals={0}
+                      value={t.crew_size ?? ""}
+                      onChange={(v) => setMany({ crew_size: v, ...(x.worked ? {} : { estimated_hours: String(siteHours * (num(v) || 1)) }) })}
+                      placeholder="1"
+                    />
+                  </label>
+                  <label>
+                    <span className="tr-label">Hours to finish</span>
+                    {x.worked ? (
+                      <span className="tr-calc" title="Worked out from the quantity and production rate">
+                        {fmt(siteHours, 1)} <span className="sub-inline">from the rate</span>
+                      </span>
+                    ) : (
+                      <NumInput
+                        value={t.site_hours ?? ""}
+                        onChange={(v) => setMany({ site_hours: v, estimated_hours: String(num(v) * people) })}
+                        placeholder={blankNum(t.site_hours) && num(t.estimated_hours) > 0 ? fmt(siteHours, 1) : "0"}
+                      />
+                    )}
+                  </label>
+                  <p className="tr-calc-line">
+                    = <b>{fmt(x.hours, 1)} labor hours</b>
+                    {people > 1 && ` (${people} people × ${fmt(siteHours, 1)} hrs)`}
+                  </p>
+                  <label>
+                    <span className="tr-label">Our cost / hr, each</span>
+                    <span className="affix">
+                      <span aria-hidden="true">$</span>
+                      <NumInput value={t.cost_rate} onChange={(v) => set("cost_rate", v)} placeholder="0.00" />
+                    </span>
+                  </label>
+                </div>
+              </div>
+              {pricing && (
+                <div className="tr-group is-price">
+                  <span className="tr-cap">
+                    Customer price{lines.length ? ", labor" : ""} <span className="tr-cap-amt">{money2(charge)}</span>
+                  </span>
+                  <div className="tr-pair">
+                    {byUnit ? (
+                      <label>
+                        <span className="tr-label">Price / {unit === "sf_coat" ? "SF a coat" : short}</span>
+                        <span className="affix">
+                          <span aria-hidden="true">$</span>
+                          <NumInput
+                            decimals={3}
+                            value={t.unit_price}
+                            onChange={(v) => set("unit_price", v)}
+                            placeholder={x.units > 0 && n(t.charge_rate) > 0 ? fmt((x.hours * n(t.charge_rate)) / x.units, 3) : "0.00"}
+                          />
+                        </span>
+                      </label>
+                    ) : (
+                      <label>
+                        <span className="tr-label">Price / hr</span>
+                        <span className="affix">
+                          <span aria-hidden="true">$</span>
+                          <NumInput value={t.charge_rate} onChange={(v) => set("charge_rate", v)} placeholder="0.00" />
+                        </span>
+                      </label>
+                    )}
+                    <label>
+                      <span className="tr-label">Labor markup</span>
+                      <span className="affix">
+                        <NumInput
+                          decimals={1}
+                          value={markup == null ? "" : String(Math.round(markup * 1000) / 10)}
+                          onChange={(v) => setMany(withMarkup(t, v, areas))}
+                          placeholder={canMarkUp(t, areas) ? "0" : "—"}
+                          disabled={!canMarkUp(t, areas)}
+                          title={canMarkUp(t, areas) ? "" : "Fill in our cost first"}
+                        />
+                        <span aria-hidden="true">%</span>
+                      </span>
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
+            {pricing && (
+              <p className="help tr-explain">
+                {byUnit
+                  ? `Type the customer's price per ${unit === "sf_coat" ? "SF a coat" : short}, or our cost and a markup. Our cost can stay blank if you only price it by the ${short}; fill it in to see the profit.`
+                  : "Type our cost and a markup, or the customer's price per hour. Either way the other one fills in."}
+              </p>
+            )}
           </>
         ) : (
           <div className="tr-sub">
@@ -870,36 +957,61 @@ function TaskRow({ t, i, count, lib, pricing, markups, areas, canAddToLibrary, b
           </div>
         )}
 
-        <p className="tr-money">
-          {isSub ? (
-            <>
-              Sub cost {money2(cost)}
-              {pricing && <> · Price {money2(cost * (1 + markupOf(t, "subcontractor", markups) / 100))}</>}
-            </>
-          ) : (
-            <>
-              {byUnit && x.units > 0 && (
-                <>
-                  {fmt(x.units)} {short}
-                  {unit === "sf_coat" && n(t.coats) > 1 && <span className="sub-inline"> ({n(t.coats)} coats)</span>}
-                  {" · "}
-                </>
-              )}
-              Cost {money2(cost)}
-              {pricing && <> · Price {money2(charge)}</>}
-              {x.hours > 0 && n(t.cost_rate) === 0 && <span className="t-near"> · no cost rate</span>}
-              {pricing && charge === 0 && (x.hours > 0 || x.units > 0) && (
-                <span className="t-near"> · no {byUnit ? "price per unit" : "charge rate"}</span>
-              )}
-              {byUnit && !x.worked && x.units > 0 && <span className="t-near"> · no production rate, so type the hours</span>}
-            </>
-          )}
-        </p>
+        {renderLine && (
+          <div className="tr-lines">
+            {lines.length > 0 && <ol className="line-edit in-task">{lines.map(([c, li]) => renderLine(c, li))}</ol>}
+            <div className="tr-line-add">
+              <button type="button" className="link" onClick={() => onAddLine("material")}>
+                + Add material
+              </button>
+              <button type="button" className="link" onClick={() => onAddLine("equipment")}>
+                + Add equipment
+              </button>
+              <button type="button" className="link" onClick={() => onAddLine("other")}>
+                + Other cost
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="tr-total">
+          <span className="tr-total-what">
+            {byUnit && !isSub && x.units > 0 && (
+              <>
+                {fmt(x.units)} {short}
+                {unit === "sf_coat" && n(t.coats) > 1 && ` (${n(t.coats)} coats)`}
+                {" · "}
+              </>
+            )}
+            {isSub ? "Sub's price" : `${fmt(x.hours, 1)} labor hrs`}
+            {lines.length > 0 && ` + ${lines.length} material/other line${lines.length > 1 ? "s" : ""}`}
+            {!isSub && x.hours > 0 && n(t.cost_rate) === 0 && <span className="t-near"> · no cost per hour</span>}
+          </span>
+          <span className="tr-total-figs">
+            <span>
+              Our cost <b>{money2(taskCost)}</b>
+            </span>
+            {pricing && (
+              <span className="tr-total-price">
+                Customer price <b>{money2(taskCharge)}</b>
+              </span>
+            )}
+            {pricing && taskCharge > 0 && (
+              <span className={taskCharge < taskCost ? "t-over" : (taskCharge - taskCost) / taskCharge < 0.15 ? "t-near" : ""}>
+                {Math.round(((taskCharge - taskCost) / taskCharge) * 100)}% margin
+              </span>
+            )}
+            {pricing && taskCharge === 0 && (x.hours > 0 || x.units > 0 || linesCost > 0) && <span className="t-near">no customer price yet</span>}
+          </span>
+        </div>
       </div>
 
       <span className="te-tools tr-tools">
         <button type="button" className="icon" onClick={() => move(-1)} disabled={i === 0} aria-label={`Move task ${i + 1} up`}>
           ▲
+        </button>
+        <button type="button" className="icon add-here" onClick={insert} aria-label={`Add a task after task ${i + 1}`} title="Add a task right below this one">
+          +
         </button>
         <button type="button" className="icon" onClick={() => move(1)} disabled={i === count - 1} aria-label={`Move task ${i + 1} down`}>
           ▼
@@ -995,6 +1107,28 @@ export function ScopeEditor({
     });
   }, [lib, !!job]);
 
+  // A permits task brings a fee line for the city's fees (passed through at
+  // cost), so they're not forgotten. Remove the line and it stays removed.
+  useEffect(() => {
+    if (!job || !pricing || !lib) return; // the starter list is swapped in when the library arrives
+    if (!job.tasks.some((t) => /permit/i.test(t.name) && !t.fee_added)) return;
+    setJob((j) => {
+      const need = j.tasks.filter((t) => /permit/i.test(t.name) && !t.fee_added);
+      const keys = new Set(j.tasks.map((t) => t.key));
+      return {
+        ...j,
+        tasks: j.tasks.map((t) => (need.includes(t) ? { ...t, fee_added: true } : t)),
+        cost_lines: [
+          // drop an untouched fee line left from a starter list that was swapped out
+          ...j.cost_lines.filter((c) => !(c.auto_fee && !keys.has(c.task_key) && !num(c.unit_cost))),
+          ...need
+            .filter((t) => !j.cost_lines.some((c) => c.category === "fee" && c.task_key === t.key))
+            .map((t) => ({ ...blankLine("fee"), description: "Permit and inspection fees (city / county)", quantity: "1", task_key: t.key, auto_fee: true })),
+        ],
+      };
+    });
+  }, [job?.tasks, lib]);
+
   // Keep a copy of unsaved work on this device after every change.
   useEffect(() => {
     if (dirty && job) safeSet(draftKey, { job, touchedTasks, savedAt: Date.now() });
@@ -1046,6 +1180,12 @@ export function ScopeEditor({
       return { ...j, tasks };
     });
   const removeTask = (i) => change((j) => ({ ...j, tasks: j.tasks.filter((_, n) => n !== i) }));
+  const addTaskAt = (at) => {
+    setTouchedTasks(true);
+    change((j) => ({ ...j, tasks: [...j.tasks.slice(0, at), blankTask(), ...j.tasks.slice(at)] }));
+  };
+  const addLineFor = (taskKey, category) =>
+    change((j) => ({ ...j, cost_lines: [...j.cost_lines, { ...blankLine(category), task_key: taskKey }] }));
   const addTask = () => {
     setTouchedTasks(true);
     change((j) => ({ ...j, tasks: [...j.tasks, blankTask()] }));
@@ -1087,10 +1227,11 @@ export function ScopeEditor({
 
   async function findAddress() {
     setLocMsg(null);
-    if (job.address.trim().length < 5) return setLocMsg({ tone: "err", text: "Type the street address, city and ZIP first." });
+    const line = composeAddress(job.site ?? addressFrom({}, "site", job.address));
+    if (line.length < 5) return setLocMsg({ tone: "err", text: "Type the street address, city and ZIP first." });
     setFinding(true);
     try {
-      const hit = await api(`/api/geocode?address=${encodeURIComponent(job.address.trim())}`);
+      const hit = await api(`/api/geocode?address=${encodeURIComponent(line)}`);
       setPin(hit.lat, hit.lng);
       setLocMsg({ tone: "ok", text: `Pin set at ${hit.matched_address || "that address"}. Check it on the map.` });
     } catch (e) {
@@ -1121,12 +1262,16 @@ export function ScopeEditor({
     if (missing >= 0) return flag(job.tasks[missing].key, `Task ${missing + 1} needs a name. It's marked in red above.`);
     const noSub = job.tasks.findIndex((t) => t.kind === "sub" && !t.sub_id && lib);
     if (noSub >= 0) return flag(job.tasks[noSub].key, `Task ${noSub + 1} is a sub task. Pick the sub, or switch it to Our crew.`);
-    const noDesc = job.cost_lines.findIndex((c) => !c.description.trim());
+    // A line added by mistake and never filled in is just dropped.
+    const empty = (c) => !c.description.trim() && !num(c.quantity) && !num(c.unit_cost);
+    const form = job.cost_lines.some(empty) ? { ...job, cost_lines: job.cost_lines.filter((c) => !empty(c)) } : job;
+    if (form !== job) setJob(form);
+    const noDesc = form.cost_lines.findIndex((c) => !c.description.trim());
     if (noDesc >= 0)
-      return flag(job.cost_lines[noDesc].key, `Line ${noDesc + 1} (${CATEGORY_LABEL[job.cost_lines[noDesc].category]}) needs a name. It's marked in red above.`);
+      return flag(form.cost_lines[noDesc].key, `Line ${noDesc + 1} (${CATEGORY_LABEL[form.cost_lines[noDesc].category]}) needs a name. It's marked in red above.`);
     setSaving(true);
     try {
-      const result = await submit(job, scopeBody(job), est);
+      const result = await submit(form, scopeBody(form), est);
       safeSet(draftKey, null);
       onDone(result);
     } catch (err) {
@@ -1141,8 +1286,187 @@ export function ScopeEditor({
   const hasPin = job.lat != null && job.lat !== "" && job.lng != null && job.lng !== "";
   const offList = lib ? job.tasks.filter((t) => t.name.trim() && !(t.template_id && lib.tasks.some((x) => x.id === t.template_id))).length : 0;
 
+  // What one cost line costs us (with tax on materials) and what we charge for it.
+  const lineMoney = (c) => {
+    const cost = lineQty(c, areas) * num(c.unit_cost);
+    if (c.category === "fee") return { cost, charge: cost };
+    const withTax = cost * (1 + (c.category === "material" ? num(job.sales_tax_pct) / 100 : 0));
+    return { cost: withTax, charge: withTax * (1 + markupOf(c, c.category, job.markups) / 100) };
+  };
+
+  // A cost line tied to a task shows on that task; the rest are for the whole job.
+  const onTask = (c) => c.task_key && job.tasks.some((t) => t.key === c.task_key);
+  const jobLines = job.cost_lines.map((c, i) => [c, i]).filter(([c]) => !onTask(c));
+  const renderLine = (c, i) => (
+              <li key={c.key} id={`row-${c.key}`} data-cat={c.category} className={bad === c.key ? "is-invalid" : undefined}>
+                <div className="le-desc">
+                  <span className="le-label">
+                    Line {i + 1} · {c.category === "equipment" ? (c.in_house ? "In-house equipment" : "Rental") : CATEGORY_LABEL[c.category]}
+                  </span>
+                  <Picker
+                    value={c.description}
+                    label={`Line ${i + 1} item`}
+                    placeholder={items.length ? "Search the price list or type" : "e.g. Acrylic resurfacer"}
+                    invalid={bad === c.key}
+                    options={items.filter((it) => it.active !== false)}
+                    emptyHint="Type part of the item name"
+                    noMatchText="Not on the price list. It'll be used as typed."
+                    onChange={(v) => {
+                      const it = c.item_id && itemById[c.item_id];
+                      setLineFields(i, { description: v, ...(it && !sameName(it.name, v) ? { item_id: null } : {}) });
+                    }}
+                    onPick={(it) => pickItem(i, it)}
+                    renderOption={(it) => (
+                      <>
+                        <span className="po-name">{it.name}</span>
+                        <span className="po-meta">
+                          {CATEGORY_LABEL[it.category]}
+                          {it.unit_cost != null && ` · ${money2(it.unit_cost)} / ${it.unit || "each"}`}
+                        </span>
+                      </>
+                    )}
+                  />
+                  {c.item_id && itemById[c.item_id] && (
+                    <span className="le-from">
+                      Price list
+                      {itemById[c.item_id].unit_cost != null && Number(c.unit_cost) !== itemById[c.item_id].unit_cost && (
+                        <>
+                          {" "}is {money2(itemById[c.item_id].unit_cost)}.{" "}
+                          <button type="button" className="link" onClick={() => setLine(i, "unit_cost", itemById[c.item_id].unit_cost)}>Use it</button>
+                        </>
+                      )}
+                    </span>
+                  )}
+                </div>
+                <label className="le-cat">
+                  <span className="le-label">Type</span>
+                  <select
+                    value={c.category === "equipment" && c.in_house ? "equipment_in_house" : c.category}
+                    onChange={(e) =>
+                      e.target.value === "equipment_in_house"
+                        ? setLineFields(i, { category: "equipment", in_house: true })
+                        : setLineFields(i, { category: e.target.value, in_house: false })
+                    }
+                  >
+                    <option value="material">Material</option>
+                    <option value="equipment">Equipment rental</option>
+                    <option value="equipment_in_house">Equipment, in-house</option>
+                    <option value="subcontractor">Sub (not tied to a task)</option>
+                    <option value="other">Other</option>
+                    <option value="fee">Permit / city fee (at cost)</option>
+                  </select>
+                </label>
+                <label className="le-qty">
+                  <span className="le-label">Qty</span>
+                  <NumInput
+                    decimals={3}
+                    value={lineFollows(c) ? String(lineQty(c, areas)) : c.quantity}
+                    onChange={(v) => setLineFields(i, { quantity: v, follows: "" })}
+                    placeholder="0"
+                    className={lineFollows(c) ? "is-auto" : undefined}
+                  />
+                </label>
+                <label className="le-unit">
+                  <span className="le-label">Unit</span>
+                  <input list="cf-units" value={c.unit} onChange={(e) => setLine(i, "unit", e.target.value)} placeholder="unit" maxLength={20} />
+                </label>
+                <label className="le-cost">
+                  <span className="le-label">Cost per unit</span>
+                  <span className="affix">
+                    <span aria-hidden="true">$</span>
+                    <NumInput value={c.unit_cost} onChange={(v) => setLine(i, "unit_cost", v)} placeholder="0.00" />
+                  </span>
+                </label>
+                <span className="le-total">
+                  <span className="le-label">Line total</span>
+                  <span>{money2(lineQty(c, areas) * num(c.unit_cost))}</span>
+                </span>
+                {pricing && c.category === "fee" && (
+                  <p className="le-markup help">Passed through at cost, no markup. Listed on the proposal so the customer sees it's included.</p>
+                )}
+                {pricing && c.category !== "fee" && (
+                  <div className="le-markup">
+                    <label>
+                      <span className="le-label vis">Markup</span>
+                      <span className="affix">
+                        <NumInput
+                          decimals={1}
+                          value={c.markup_pct ?? ""}
+                          onChange={(v) => setLine(i, "markup_pct", v)}
+                          placeholder={`${num(job.markups?.[c.category])} (default)`}
+                          aria-label={`Line ${i + 1} markup percent`}
+                        />
+                        <span aria-hidden="true">%</span>
+                      </span>
+                    </label>
+                    <span className="le-price">
+                      Price{" "}
+                      {money2(
+                        lineQty(c, areas) * num(c.unit_cost) * (1 + (c.category === "material" ? num(job.sales_tax_pct) / 100 : 0)) *
+                          (1 + markupOf(c, c.category, job.markups) / 100)
+                      )}
+                      {c.category === "material" && num(job.sales_tax_pct) > 0 && <span className="sub-inline"> with tax</span>}
+                    </span>
+                  </div>
+                )}
+                <label className="le-task">
+                  <span className="le-label">For task</span>
+                  <select value={c.task_key ?? ""} onChange={(e) => setLine(i, "task_key", e.target.value)}>
+                    <option value="">Whole job</option>
+                    {job.tasks.map((t, ti) => (
+                      <option key={t.key} value={t.key}>{t.name || `Task ${ti + 1}`}</option>
+                    ))}
+                  </select>
+                </label>
+                <span className="te-tools le-tools">
+                  <button type="button" className="icon remove remove-text" onClick={() => removeLine(i)} aria-label={`Remove line ${i + 1}`}>
+                    ✕ Remove
+                  </button>
+                </span>
+                {areas && c.category === "material" && (
+                  <div className="le-cover">
+                    {c.follows ? (
+                      <>
+                        <div className="le-cover-grid">
+                          <label>
+                            <span className="le-label vis">Area</span>
+                            <select value={c.follows} onChange={(e) => setLine(i, "follows", e.target.value)}>
+                              <option value="paint">Paintable area</option>
+                              <option value="surface">Surface area</option>
+                            </select>
+                          </label>
+                          <label>
+                            <span className="le-label vis">Coats</span>
+                            <NumInput decimals={1} value={c.coats} onChange={(v) => setLine(i, "coats", v)} placeholder="1" />
+                          </label>
+                          <label>
+                            <span className="le-label vis">One {c.unit || "unit"} covers (SF per coat)</span>
+                            <NumInput decimals={1} value={c.coverage} onChange={(v) => setLine(i, "coverage", v)} placeholder="SF" />
+                          </label>
+                        </div>
+                        <p className="help">
+                          {areas[c.follows] == null
+                            ? "Set the court size above and the quantity fills in."
+                            : num(c.coverage) > 0
+                              ? `${fmt(areas[c.follows], 0)} SF × ${num(c.coats) || 1} coat${num(c.coats) > 1 ? "s" : ""} ÷ ${fmt(c.coverage)} SF a ${c.unit || "unit"} = ${fmt((areas[c.follows] * (num(c.coats) || 1)) / num(c.coverage))}, so ${lineQty(c, areas)}.`
+                              : "Put in how many square feet one unit covers per coat."}{" "}
+                          <button type="button" className="link" onClick={() => setLineFields(i, { follows: "", quantity: String(lineQty(c, areas) || c.quantity || "") })}>
+                            Type the quantity instead
+                          </button>
+                        </p>
+                      </>
+                    ) : (
+                      <button type="button" className="link" onClick={() => setLineFields(i, { follows: "paint", coats: c.coats || "2" })}>
+                        Work the quantity out from the court area
+                      </button>
+                    )}
+                  </div>
+                )}
+              </li>
+  );
+
   return (
-    <form className="editor" onSubmit={save}>
+    <form className="editor" onSubmit={save} onKeyDown={noEnterSubmit}>
       <button type="button" className="link back" onClick={onCancel}>
         {backLabel}
       </button>
@@ -1213,11 +1537,8 @@ export function ScopeEditor({
         <fieldset className="where">
           <legend>{labels.where ?? "Job location"}</legend>
           <p className="help">The pin flags clock-ins made away from the site. Find it from the address, or stand on the court and use your location.</p>
+          <AddressFields section="site" value={job.site ?? addressFrom({}, "site", job.address)} onChange={(v) => set("site", v)} />
           <div className="grid">
-            <label className="span-2">
-              Street address
-              <input value={job.address} onChange={(e) => set("address", e.target.value)} placeholder="Street, city, ZIP" autoComplete="street-address" />
-            </label>
             <label className="span-2">
               <span>
                 Parcel ID <span className="optional">(optional)</span>
@@ -1305,6 +1626,11 @@ export function ScopeEditor({
               setMany={(fields) => setTaskFields(i, fields)}
               move={(d) => moveTask(i, d)}
               remove={() => removeTask(i)}
+              insert={() => addTaskAt(i + 1)}
+              lines={job.cost_lines.map((c, li) => [c, li]).filter(([c]) => c.task_key === t.key)}
+              renderLine={renderLine}
+              onAddLine={(cat) => addLineFor(t.key, cat)}
+              lineMoney={lineMoney}
             />
           ))}
         </ol>
@@ -1344,177 +1670,19 @@ export function ScopeEditor({
             </span>
           </label>
         </div>
-        {job.cost_lines.length === 0 ? (
+        {jobLines.length === 0 ? (
           <p className="help">
-            No lines yet. Add the coatings, sand, line paint, nets and posts, and equipment this job needs. Subs go on their task above.
-            {" "}Material quantities here become the job's material list for the warehouse and crew lead.
+            {job.cost_lines.length
+              ? "Everything is on its task above. Add anything here that's for the whole job."
+              : "Add materials, rentals and fees on the task they're for (+ Add material on the task), or here for the whole job."}
+            {" "}Material quantities become the job's material list for the warehouse and crew lead.
           </p>
         ) : (
           <ol className="line-edit">
             <li className="line-head" aria-hidden="true">
               <span>Item</span><span>Type</span><span>Qty</span><span>Unit</span><span>Cost per unit</span><span>Total</span><span>For task</span><span />
             </li>
-            {job.cost_lines.map((c, i) => (
-              <li key={c.key} id={`row-${c.key}`} data-cat={c.category} className={bad === c.key ? "is-invalid" : undefined}>
-                <div className="le-desc">
-                  <span className="le-label">
-                    Line {i + 1} · {c.category === "equipment" ? (c.in_house ? "In-house equipment" : "Rental") : CATEGORY_LABEL[c.category]}
-                  </span>
-                  <Picker
-                    value={c.description}
-                    label={`Line ${i + 1} item`}
-                    placeholder={items.length ? "Search the price list or type" : "e.g. Acrylic resurfacer"}
-                    invalid={bad === c.key}
-                    options={items.filter((it) => it.active !== false)}
-                    emptyHint="Type part of the item name"
-                    noMatchText="Not on the price list. It'll be used as typed."
-                    onChange={(v) => {
-                      const it = c.item_id && itemById[c.item_id];
-                      setLineFields(i, { description: v, ...(it && !sameName(it.name, v) ? { item_id: null } : {}) });
-                    }}
-                    onPick={(it) => pickItem(i, it)}
-                    renderOption={(it) => (
-                      <>
-                        <span className="po-name">{it.name}</span>
-                        <span className="po-meta">
-                          {CATEGORY_LABEL[it.category]}
-                          {it.unit_cost != null && ` · ${money2(it.unit_cost)} / ${it.unit || "each"}`}
-                        </span>
-                      </>
-                    )}
-                  />
-                  {c.item_id && itemById[c.item_id] && (
-                    <span className="le-from">
-                      Price list
-                      {itemById[c.item_id].unit_cost != null && Number(c.unit_cost) !== itemById[c.item_id].unit_cost && (
-                        <>
-                          {" "}is {money2(itemById[c.item_id].unit_cost)}.{" "}
-                          <button type="button" className="link" onClick={() => setLine(i, "unit_cost", itemById[c.item_id].unit_cost)}>Use it</button>
-                        </>
-                      )}
-                    </span>
-                  )}
-                </div>
-                <label className="le-cat">
-                  <span className="le-label">Type</span>
-                  <select
-                    value={c.category === "equipment" && c.in_house ? "equipment_in_house" : c.category}
-                    onChange={(e) =>
-                      e.target.value === "equipment_in_house"
-                        ? setLineFields(i, { category: "equipment", in_house: true })
-                        : setLineFields(i, { category: e.target.value, in_house: false })
-                    }
-                  >
-                    <option value="material">Material</option>
-                    <option value="equipment">Equipment rental</option>
-                    <option value="equipment_in_house">Equipment, in-house</option>
-                    <option value="subcontractor">Sub (not tied to a task)</option>
-                    <option value="other">Other</option>
-                  </select>
-                </label>
-                <label className="le-qty">
-                  <span className="le-label">Qty</span>
-                  <NumInput
-                    decimals={3}
-                    value={lineFollows(c) ? String(lineQty(c, areas)) : c.quantity}
-                    onChange={(v) => setLineFields(i, { quantity: v, follows: "" })}
-                    placeholder="0"
-                    className={lineFollows(c) ? "is-auto" : undefined}
-                  />
-                </label>
-                <label className="le-unit">
-                  <span className="le-label">Unit</span>
-                  <input list="cf-units" value={c.unit} onChange={(e) => setLine(i, "unit", e.target.value)} placeholder="unit" maxLength={20} />
-                </label>
-                <label className="le-cost">
-                  <span className="le-label">Cost per unit</span>
-                  <span className="affix">
-                    <span aria-hidden="true">$</span>
-                    <NumInput value={c.unit_cost} onChange={(v) => setLine(i, "unit_cost", v)} placeholder="0.00" />
-                  </span>
-                </label>
-                <span className="le-total">
-                  <span className="le-label">Line total</span>
-                  <span>{money2(lineQty(c, areas) * num(c.unit_cost))}</span>
-                </span>
-                {pricing && (
-                  <div className="le-markup">
-                    <label>
-                      <span className="le-label vis">Markup</span>
-                      <span className="affix">
-                        <NumInput
-                          decimals={1}
-                          value={c.markup_pct ?? ""}
-                          onChange={(v) => setLine(i, "markup_pct", v)}
-                          placeholder={`${num(job.markups?.[c.category])} (default)`}
-                          aria-label={`Line ${i + 1} markup percent`}
-                        />
-                        <span aria-hidden="true">%</span>
-                      </span>
-                    </label>
-                    <span className="le-price">
-                      Price{" "}
-                      {money2(
-                        lineQty(c, areas) * num(c.unit_cost) * (1 + (c.category === "material" ? num(job.sales_tax_pct) / 100 : 0)) *
-                          (1 + markupOf(c, c.category, job.markups) / 100)
-                      )}
-                      {c.category === "material" && num(job.sales_tax_pct) > 0 && <span className="sub-inline"> with tax</span>}
-                    </span>
-                  </div>
-                )}
-                <label className="le-task">
-                  <span className="le-label">For task</span>
-                  <select value={c.task_key ?? ""} onChange={(e) => setLine(i, "task_key", e.target.value)}>
-                    <option value="">Whole job</option>
-                    {job.tasks.map((t, ti) => (
-                      <option key={t.key} value={t.key}>{t.name || `Task ${ti + 1}`}</option>
-                    ))}
-                  </select>
-                </label>
-                <span className="te-tools le-tools">
-                  <button type="button" className="icon remove" onClick={() => removeLine(i)} aria-label={`Remove line ${i + 1}`}>✕</button>
-                </span>
-                {areas && c.category === "material" && (
-                  <div className="le-cover">
-                    {c.follows ? (
-                      <>
-                        <div className="le-cover-grid">
-                          <label>
-                            <span className="le-label vis">Area</span>
-                            <select value={c.follows} onChange={(e) => setLine(i, "follows", e.target.value)}>
-                              <option value="paint">Paintable area</option>
-                              <option value="surface">Surface area</option>
-                            </select>
-                          </label>
-                          <label>
-                            <span className="le-label vis">Coats</span>
-                            <NumInput decimals={1} value={c.coats} onChange={(v) => setLine(i, "coats", v)} placeholder="1" />
-                          </label>
-                          <label>
-                            <span className="le-label vis">One {c.unit || "unit"} covers (SF per coat)</span>
-                            <NumInput decimals={1} value={c.coverage} onChange={(v) => setLine(i, "coverage", v)} placeholder="SF" />
-                          </label>
-                        </div>
-                        <p className="help">
-                          {areas[c.follows] == null
-                            ? "Set the court size above and the quantity fills in."
-                            : num(c.coverage) > 0
-                              ? `${fmt(areas[c.follows], 0)} SF × ${num(c.coats) || 1} coat${num(c.coats) > 1 ? "s" : ""} ÷ ${fmt(c.coverage)} SF a ${c.unit || "unit"} = ${fmt((areas[c.follows] * (num(c.coats) || 1)) / num(c.coverage))}, so ${lineQty(c, areas)}.`
-                              : "Put in how many square feet one unit covers per coat."}{" "}
-                          <button type="button" className="link" onClick={() => setLineFields(i, { follows: "", quantity: String(lineQty(c, areas) || c.quantity || "") })}>
-                            Type the quantity instead
-                          </button>
-                        </p>
-                      </>
-                    ) : (
-                      <button type="button" className="link" onClick={() => setLineFields(i, { follows: "paint", coats: c.coats || "2" })}>
-                        Work the quantity out from the court area
-                      </button>
-                    )}
-                  </div>
-                )}
-              </li>
-            ))}
+            {jobLines.map(([c, i]) => renderLine(c, i))}
           </ol>
         )}
         <datalist id="cf-units">
@@ -1526,6 +1694,7 @@ export function ScopeEditor({
           <button type="button" className="btn-ghost" onClick={() => addLine("material")}>Add material</button>
           <button type="button" className="btn-ghost" onClick={() => addLine("equipment")}>Add equipment</button>
           <button type="button" className="btn-ghost" onClick={() => addLine("other")}>Add other cost</button>
+          <button type="button" className="btn-ghost" onClick={() => addLine("fee")}>Add permit / city fee</button>
         </div>
       </section>
 

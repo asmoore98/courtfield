@@ -25,7 +25,8 @@ def load_client(db: Session, user: User, client_id: str) -> Client:
 
 def client_out(c: Client) -> dict:
     return {"id": c.id, "name": c.name, "contact_name": c.contact_name, "phone": c.phone, "email": c.email,
-            "billing_address": c.billing_address, "notes": c.notes, "links": c.links, "active": c.active,
+            "billing_address": c.billing_address, "billing_street": c.billing_street, "billing_city": c.billing_city,
+            "billing_state": c.billing_state, "billing_zip": c.billing_zip, "notes": c.notes, "links": c.links, "active": c.active,
             "created_at": iso(c.created_at)}
 
 

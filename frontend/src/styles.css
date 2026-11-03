@@ -986,3 +986,111 @@ input.is-auto { background: var(--court-tint); }
   .le-cover-grid label:last-child { grid-column: 1 / -1; }
   .cq-follow { margin-left: 4px; }
 }
+
+/* ---------- address boxes, Drive button, notes, photos ---------- */
+.address { border: 0; padding: 0; margin: 0 0 10px; min-width: 0; display: grid; gap: 10px; }
+.address legend { font-weight: 600; padding: 0; margin-bottom: 6px; }
+.address label { display: grid; gap: 4px; font-weight: 600; }
+.addr-row { display: grid; grid-template-columns: minmax(0, 1fr) 72px 110px; gap: 10px; }
+.links-field { display: grid; gap: 6px; }
+.links-field label { display: grid; gap: 4px; font-weight: 600; }
+.drive-btn { justify-self: start; display: inline-flex; align-items: center; min-height: 44px; text-decoration: none; }
+.cq-add-note { justify-self: start; font-size: 0.9rem; }
+.cq-note { display: grid; gap: 4px; }
+.cq-note textarea { min-height: 60px; }
+.cl-note { display: block; font-style: italic; }
+
+.photos .panel-head { margin-bottom: 8px; }
+.ph-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+.ph-thumb {
+  position: relative; display: block; aspect-ratio: 1; padding: 0; border: 1px solid var(--rule); border-radius: 8px;
+  overflow: hidden; background: var(--page); cursor: pointer;
+}
+.ph-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ph-thumb.is-pending { opacity: 0.75; cursor: default; }
+.ph-tag { position: absolute; left: 4px; bottom: 4px; font-size: 0.7rem; padding: 0 6px; border-radius: 999px; background: var(--court); color: #fff; }
+.ph-wait { display: grid; place-items: center; height: 100%; color: var(--muted); }
+.ph-viewer { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, 0.85); display: grid; place-items: center; padding: 12px; }
+.ph-frame { max-width: min(1100px, 100%); max-height: 100%; display: grid; gap: 10px; background: var(--panel); border-radius: 12px; padding: 10px; overflow: auto; }
+.ph-frame img { max-width: 100%; max-height: 75vh; object-fit: contain; border-radius: 6px; justify-self: center; }
+.ph-info { display: flex; flex-wrap: wrap; gap: 8px 16px; justify-content: space-between; align-items: center; }
+.ph-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; }
+.ph-actions .btn-ghost { display: inline-flex; align-items: center; text-decoration: none; color: var(--court); font-weight: 600; }
+@media (max-width: 640px) {
+  .addr-row { grid-template-columns: minmax(0, 1fr) 64px; }
+  .addr-zip { grid-column: 1 / -1; max-width: 160px; }
+}
+
+/* ---------- cost vs. price on a task, notes, sending ---------- */
+.tr-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.tr-group { display: grid; gap: 6px; border: 1px solid var(--rule); border-radius: 8px; padding: 8px 10px 10px; }
+.tr-group.is-price { border-color: var(--court); }
+.tr-cap { font-size: 0.78rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.tr-group.is-price .tr-cap { color: var(--court); }
+.tr-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; align-items: end; }
+.tr-explain { margin: -2px 0 0; font-size: 0.85rem; }
+.tr-rate-link { grid-column: 1 / -1; justify-self: start; font-size: 0.9rem; }
+.tr-from-sales { margin: 2px 0 0; padding: 6px 10px; border-radius: 8px; background: var(--court-tint); font-size: 0.9rem; }
+.notes-panel { display: grid; gap: 12px; }
+.notes-panel label { display: grid; gap: 4px; font-weight: 600; }
+.note-internal textarea { border-color: var(--rule); }
+.note-customer { padding: 10px; border: 2px solid var(--near); border-radius: 10px; }
+.tag-internal, .tag-customer { display: inline-block; margin-left: 6px; padding: 1px 8px; border-radius: 999px; font-size: 0.78rem; font-weight: 700; }
+.tag-internal { background: var(--rule); color: var(--asphalt); }
+.tag-customer { background: var(--near); color: #fff; }
+.send-review { margin-top: 12px; padding: 12px; border: 2px solid var(--near); border-radius: 10px; display: grid; gap: 10px; }
+.send-review h4 { margin: 0; }
+.review-list { margin: 0; display: grid; gap: 8px; }
+.review-list dt { color: var(--muted); font-size: 0.9rem; }
+.review-list dd { margin: 2px 0 0; }
+.review-notes dd { font-weight: 600; }
+.send-review label { display: grid; gap: 4px; font-weight: 600; }
+.send-review .check { display: flex; gap: 8px; align-items: flex-start; font-weight: 600; }
+.send-box { display: grid; gap: 6px; padding: 10px 12px; margin-bottom: 10px; border-radius: 10px; background: var(--court-tint); }
+.send-box p { margin: 0; }
+.send-box .btn { justify-self: start; }
+.pr-fees { margin: 4px 0 0; font-size: 0.95rem; }
+.pr-fees th { font-weight: 400; text-align: left; padding-right: 24px; }
+@media (max-width: 640px) {
+  .tr-groups { grid-template-columns: minmax(0, 1fr); }
+}
+.send-review .btn:disabled { opacity: 0.45; }
+
+/* ---------- people × hours, task materials and totals ---------- */
+.tr-group .tr-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.tr-calc-line { grid-column: 1 / -1; margin: -2px 0 2px; font-size: 0.9rem; color: var(--muted); }
+.tr-calc-line b { color: var(--asphalt); }
+.tr-cap-amt { float: right; font-size: 1.25rem; font-family: var(--font-num); letter-spacing: 0; text-transform: none; color: var(--court); }
+.tr-lines { display: grid; gap: 6px; border-top: 1px dashed var(--rule); padding-top: 8px; }
+.tr-line-add { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.tr-line-add .link { font-size: 0.95rem; }
+.line-edit.in-task li:not(.line-head) { border-left-width: 3px; }
+.tr-total { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 16px;
+  padding: 8px 10px; border-radius: 8px; background: var(--panel); border: 1px solid var(--rule); }
+.tr-total-what { color: var(--muted); font-size: 0.9rem; }
+.tr-total-figs { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; font-family: var(--font-num); font-size: 1.05rem; }
+.tr-total-price b { font-size: 1.35rem; color: var(--court); }
+.tr-tools .add-here { font-size: 1.3rem; font-weight: 700; color: var(--court); }
+
+/* Lines inside a task card always use the stacked layout (the card is too
+   narrow for the 8-column row), with a plain Remove button. */
+.line-edit.in-task { gap: 10px; }
+.line-edit.in-task li { grid-template-columns: 1fr 1fr 1fr; align-items: end; gap: 10px; padding: 10px; border: 1px solid var(--rule);
+  border-left: 3px solid var(--muted); border-radius: 10px; background: var(--panel); }
+.line-edit.in-task li[data-cat="material"] { border-left-color: var(--court); }
+.line-edit.in-task li[data-cat="equipment"] { border-left-color: var(--near); }
+.line-edit.in-task .le-desc { grid-column: 1 / -1; grid-row: 1; }
+.line-edit.in-task .le-cat { grid-column: 1 / 3; grid-row: 2; }
+.line-edit.in-task .le-total { grid-column: 3; grid-row: 2; display: grid; gap: 4px; align-self: end; }
+.line-edit.in-task .le-qty { grid-column: 1; grid-row: 3; }
+.line-edit.in-task .le-unit { grid-column: 2; grid-row: 3; }
+.line-edit.in-task .le-cost { grid-column: 3; grid-row: 3; }
+.line-edit.in-task .le-task { grid-column: 1 / 3; grid-row: 4; }
+.line-edit.in-task .le-tools { grid-column: 3; grid-row: 4; justify-content: flex-end; align-self: end; }
+.line-edit.in-task .le-label {
+  position: static; width: auto; height: auto; margin: 0; overflow: visible; clip: auto; white-space: normal;
+  font-size: 0.8rem; font-weight: 500; color: var(--muted);
+}
+.line-edit.in-task .le-desc .le-label { font-size: 0.85rem; font-weight: 700; color: var(--asphalt); }
+.le-tools .remove-text { width: auto; padding: 0 12px; font-size: 0.95rem; }
+.tr-group { align-content: start; }

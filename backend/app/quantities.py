@@ -4,7 +4,7 @@ Each task has a unit. With a production rate, its crew hours are worked out
 from the quantity instead of guessed:
 
     SF, SF per coat, LF, SY   rate = how many units one person does in an hour
-    each, CY, ton, lump sum   rate = person-hours for one unit
+    acre, each, CY, ton, lump sum   rate = person-hours for one unit
 
 "SF per coat" tasks (resurfacer, color) multiply the area by the coats.
 "hr" tasks have their hours typed in, as before.
@@ -14,9 +14,9 @@ one, otherwise hours x the charge rate. Mirrored in frontend/src/qty.js.
 """
 import math
 
-UNITS = ("hr", "sf", "sf_coat", "lf", "sy", "cy", "ton", "ea", "ls")
+UNITS = ("hr", "sf", "sf_coat", "lf", "sy", "cy", "ton", "acre", "ea", "ls")
 UNIT_LABEL = {"hr": "hours", "sf": "SF", "sf_coat": "SF per coat", "lf": "LF", "sy": "SY", "cy": "CY",
-              "ton": "tons", "ea": "each", "ls": "lump sum"}
+              "ton": "tons", "acre": "acres", "ea": "each", "ls": "lump sum"}
 PER_HOUR = {"sf", "sf_coat", "lf", "sy"}  # rate is units per person-hour; the rest are hours per unit
 
 # Where a task's or a material's quantity can come from on an estimate.

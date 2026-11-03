@@ -3,6 +3,7 @@ checklist sales fills in on site."""
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -27,7 +28,7 @@ def _mine(lead: Lead, user: User) -> bool:
 
 def load_lead(db: Session, user: User, lead_id: str) -> Lead:
     lead = db.scalar(select(Lead).where(Lead.id == lead_id, Lead.company_id == user.company_id)
-                     .options(selectinload(Lead.client), selectinload(Lead.salesperson)))
+                     .options(selectinload(Lead.client), selectinload(Lead.salesperson), selectinload(Lead.sent_by)))
     if lead is None or not _mine(lead, user):
         raise HTTPException(404, "Lead not found")
     return lead
@@ -94,22 +95,25 @@ def survey_changes(old: dict, new: dict, scope: str | None) -> str:
 def _clean_survey(body: LeadIn) -> str:
     sv = body.survey or SiteSurvey()
     scope = body.scope_type.value if body.scope_type else None
-    return json.dumps({"court": sv.court.model_dump(), "answers": tidy(scope, sv.answers)})
+    court = body.court_type.value if body.court_type else None
+    return json.dumps({"court": sv.court.model_dump(), "answers": tidy(scope, sv.answers, court)})
 
 
 def lead_out(lead: Lead, statuses: list[str] | None = None) -> dict:
     survey = survey_of(lead)
     scope = lead.scope_type.value if lead.scope_type else None
     return {
-        "survey": survey, "checklist": progress(scope, survey),
+        "survey": survey, "checklist": progress(scope, survey, lead.court_type.value if lead.court_type else None),
         "outcome": outcome(lead, statuses or []),
         "id": lead.id, "client_id": lead.client_id, "client_name": lead.client.name, "name": lead.name,
         "site_address": lead.site_address, "parcel_id": lead.parcel_id,
+        **{f"site_{k}": getattr(lead, f"site_{k}") for k in ("street", "city", "state", "zip")},
         "court_type": lead.court_type.value if lead.court_type else None,
         "scope_type": lead.scope_type.value if lead.scope_type else None,
         "description": lead.description, "links": lead.links,
         "bid_due": lead.bid_due.isoformat() if lead.bid_due else None,
         "status": lead.status.value, "status_reason": lead.status_reason,
+        "sent_at": iso(lead.sent_at), "sent_by": lead.sent_by.name if lead.sent_by else None,
         "salesperson_id": lead.salesperson_id, "salesperson": lead.salesperson.name if lead.salesperson else None,
         "created_at": iso(lead.created_at), "updated_at": iso(lead.updated_at),
     }
@@ -122,7 +126,7 @@ def _plain(v):
 @router.get("")
 def list_leads(status: LeadStatus | None = None, user: User = Depends(sales_side), db: Session = Depends(get_db)):
     q = (select(Lead).where(Lead.company_id == user.company_id)
-         .options(selectinload(Lead.client), selectinload(Lead.salesperson)).order_by(Lead.created_at.desc()))
+         .options(selectinload(Lead.client), selectinload(Lead.salesperson), selectinload(Lead.sent_by)).order_by(Lead.created_at.desc()))
     if status:
         q = q.where(Lead.status == status)
     leads = [l for l in db.scalars(q) if _mine(l, user)]
@@ -191,6 +195,38 @@ def edit_lead(lead_id: str, body: LeadIn, user: User = Depends(sales_side), db: 
         log(db, user, "lead", lead.id, "Changed the site checklist", checklist_what)
     db.commit()
     db.expire(lead)
+    return lead_out(load_lead(db, user, lead.id))
+
+
+class SendIn(BaseModel):
+    note: str = Field(default="", max_length=1000)
+
+
+@router.post("/{lead_id}/send")
+def send_to_estimating(lead_id: str, body: SendIn, user: User = Depends(sales_side), db: Session = Depends(get_db)):
+    """Sales is done with the lead: it shows up for the estimators."""
+    lead = load_lead(db, user, lead_id)
+    if lead.status == LeadStatus.dropped:
+        raise HTTPException(409, "Reopen the lead first.")
+    if lead.sent_at is None:
+        lead.sent_at, lead.sent_by, lead.updated_at = utcnow(), user, utcnow()
+        p = progress(lead.scope_type.value if lead.scope_type else None, survey_of(lead), lead.court_type.value if lead.court_type else None)
+        left = f" ({p['total'] - p['done']} checklist questions not answered)" if p and p["done"] < p["total"] else ""
+        log(db, user, "lead", lead.id, "Sent to estimating" + left, body.note.strip())
+        db.commit()
+    return lead_out(load_lead(db, user, lead.id))
+
+
+@router.post("/{lead_id}/unsend")
+def take_back(lead_id: str, body: SendIn, user: User = Depends(sales_side), db: Session = Depends(get_db)):
+    """Pull it back to finish it, as long as no estimate has been started."""
+    lead = load_lead(db, user, lead_id)
+    if db.scalar(select(Estimate.id).where(Estimate.lead_id == lead.id, Estimate.company_id == user.company_id)):
+        raise HTTPException(409, "An estimate was already started from this lead.")
+    if lead.sent_at is not None:
+        lead.sent_at, lead.sent_by, lead.updated_at = None, None, utcnow()
+        log(db, user, "lead", lead.id, "Taken back from estimating", body.note.strip())
+        db.commit()
     return lead_out(load_lead(db, user, lead.id))
 
 

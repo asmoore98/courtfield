@@ -13,6 +13,7 @@ import uuid
 from datetime import date, datetime, timezone
 
 from sqlalchemy import (
+    LargeBinary,
     Date,
     DateTime,
     Enum,
@@ -83,6 +84,7 @@ class TaskType(str, enum.Enum):
     turf = "turf"
     drainage = "drainage"
     cleanup = "cleanup"
+    building = "building"      # concession stands, restrooms, storage: their slabs, walls, roofs
 
 
 class TaskKind(str, enum.Enum):
@@ -94,7 +96,8 @@ class CostCategory(str, enum.Enum):
     material = "material"
     equipment = "equipment"          # rentals: sprayers, lifts, dumpsters
     subcontractor = "subcontractor"  # e.g. fencing or lighting sub
-    other = "other"                  # permits, freight, disposal
+    other = "other"                  # freight, disposal
+    fee = "fee"                      # permit and city fees: passed through at cost, listed on the proposal
 
 
 class MoveKind(str, enum.Enum):
@@ -124,6 +127,8 @@ class Company(Base):
     proposal_terms: Mapped[str] = mapped_column(Text, default="", server_default="")
     # Days a sent estimate stays good before it's marked expired.
     estimate_valid_days: Mapped[int] = mapped_column(Integer, default=30, server_default="30")
+    # The company's Google Drive folder: the "Open Drive" button next to link boxes.
+    drive_folder_url: Mapped[str] = mapped_column(String(500), default="", server_default="")
     # Pricing defaults for new estimates. Rates fill in tasks that have none
     # of their own in the library; markups are percent over cost.
     default_cost_rate: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
@@ -198,6 +203,11 @@ class Job(Base):
     address: Mapped[str] = mapped_column(String(300), default="")
     # County parcel ID. New construction often has no street address yet.
     parcel_id: Mapped[str] = mapped_column(String(60), default="", server_default="")
+    # The address in parts (addresses.py); `address` is the one-line version.
+    site_street: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    site_city: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    site_state: Mapped[str] = mapped_column(String(40), default="", server_default="")
+    site_zip: Mapped[str] = mapped_column(String(10), default="", server_default="")
     lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     lng: Mapped[float | None] = mapped_column(Float, nullable=True)
     court_type: Mapped[CourtType] = mapped_column(Enum(CourtType))
@@ -247,6 +257,9 @@ class JobTask(Base):
     coats: Mapped[float | None] = mapped_column(Float, nullable=True)
     production_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     unit_price: Mapped[float | None] = mapped_column(Float, nullable=True)  # what we charge per unit
+    # How many people work it; estimated_hours is everyone's hours together
+    # (4 people for 8 hours = 32), so it compares with the time clocked.
+    crew_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     job: Mapped[Job] = relationship(back_populates="tasks")
 
@@ -422,6 +435,10 @@ class Client(Base):
     phone: Mapped[str] = mapped_column(String(40), default="")
     email: Mapped[str] = mapped_column(String(254), default="")
     billing_address: Mapped[str] = mapped_column(String(300), default="")
+    billing_street: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    billing_city: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    billing_state: Mapped[str] = mapped_column(String(40), default="", server_default="")
+    billing_zip: Mapped[str] = mapped_column(String(10), default="", server_default="")
     notes: Mapped[str] = mapped_column(Text, default="")
     links: Mapped[str] = mapped_column(Text, default="")  # shared-drive links, one per line
     active: Mapped[bool] = mapped_column(default=True)
@@ -448,6 +465,10 @@ class Lead(Base):
     name: Mapped[str] = mapped_column(String(200))
     site_address: Mapped[str] = mapped_column(String(300), default="")
     parcel_id: Mapped[str] = mapped_column(String(60), default="")
+    site_street: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    site_city: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    site_state: Mapped[str] = mapped_column(String(40), default="", server_default="")
+    site_zip: Mapped[str] = mapped_column(String(10), default="", server_default="")
     court_type: Mapped[CourtType | None] = mapped_column(Enum(CourtType), nullable=True)
     scope_type: Mapped[ScopeType | None] = mapped_column(Enum(ScopeType), nullable=True)
     description: Mapped[str] = mapped_column(Text, default="")
@@ -458,12 +479,16 @@ class Lead(Base):
     salesperson_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     # The site checklist sales fills in on site: court size and answers (JSON).
     survey: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # Sales hands the lead to the estimators when it's wrapped up.
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sent_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     client: Mapped[Client] = relationship()
     salesperson: Mapped[User | None] = relationship(foreign_keys=[salesperson_id])
+    sent_by: Mapped[User | None] = relationship(foreign_keys=[sent_by_id])
 
 
 class EstimateStatus(str, enum.Enum):
@@ -596,3 +621,32 @@ class Subcontractor(Base):
     active: Mapped[bool] = mapped_column(default=True)
     created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Photo(Base):
+    """A photo on a lead or an estimate, taken or picked on a phone. Shrunk on
+    the phone before it's sent. Kept in the database for now; `storage` says
+    where the picture lives so it can move to the company Google Drive later.
+    Never deleted: removed with a reason, and the removal is in the history."""
+
+    __tablename__ = "photos"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))  # lead | estimate
+    subject_id: Mapped[str] = mapped_column(String(36), index=True)
+    name: Mapped[str] = mapped_column(String(200), default="")
+    caption: Mapped[str] = mapped_column(String(500), default="")
+    content_type: Mapped[str] = mapped_column(String(40), default="image/jpeg")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    storage: Mapped[str] = mapped_column(String(10), default="db")  # db | drive (later)
+    data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    thumb: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    drive_file_id: Mapped[str] = mapped_column(String(100), default="")
+    created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    removed_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    removed_reason: Mapped[str] = mapped_column(Text, default="")
+
+    created_by: Mapped[User] = relationship(foreign_keys=[created_by_id])

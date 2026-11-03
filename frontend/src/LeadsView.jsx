@@ -3,9 +3,10 @@ import { useEffect, useState } from "react";
 import { api } from "./api";
 import { ClientPicker, saveClient } from "./ClientPicker";
 import { COURT_TYPES, SCOPE_TYPES } from "./JobEditor";
+import Photos, { uploadAll } from "./Photos";
 import { ChecklistForm, ChecklistSummary, blankCourt, courtBody, courtForm, tidyAnswers, useChecklists } from "./Checklist";
 import {
-  ActivityList, COURT_LABEL, LEAD_STATUS, LinkList, LinksField, NoteAction, Restored, SCOPE_LABEL, StatusChip, fmtDate, money0, useApi, useDraft, useScreen,
+  ActivityList, AddressFields, COURT_LABEL, LEAD_STATUS, LinkList, LinksField, NoteAction, Restored, addressBody, addressFrom, blankAddress, noEnterSubmit, SCOPE_LABEL, StatusChip, fmtDate, money0, useApi, useDraft, useScreen,
 } from "./bits";
 
 const SCREEN_KEY = "cf.leads.screen";
@@ -42,7 +43,7 @@ function LeadList({ me, onOpen, onNew }) {
     ["all", "All"],
   ];
   const shown = data.filter(groups[filter]);
-  const waiting = data.filter((l) => l.status === "new").length;
+  const waiting = data.filter((l) => l.status === "new" && !l.sent_at).length;
 
   return (
     <div className="sales">
@@ -52,9 +53,10 @@ function LeadList({ me, onOpen, onNew }) {
           New lead
         </button>
       </div>
-      {me.estimates && waiting > 0 && (
+      {waiting > 0 && (
         <p className="follow-note">
-          <b>{waiting === 1 ? "1 lead is" : `${waiting} leads are`} waiting on an estimate.</b>
+          <b>{waiting === 1 ? "1 lead hasn't" : `${waiting} leads haven't`} been sent to estimating yet.</b> Open it and tap Send to estimating when it's
+          wrapped up.
         </p>
       )}
       <div className="filter-row" role="group" aria-label="Show leads">
@@ -84,6 +86,7 @@ function LeadList({ me, onOpen, onNew }) {
                       Checklist {l.checklist.done}/{l.checklist.total}
                     </span>
                   )}
+                  {l.status === "new" && <span className={l.sent_at ? "" : "t-near"}>{l.sent_at ? "With estimating" : "Not sent to estimating"}</span>}
                   {l.bid_due && <span className={new Date(l.bid_due) < new Date() && l.status === "new" ? "t-over" : ""}>Bid due {fmtDate(l.bid_due + "T12:00:00")}</span>}
                 </span>
               </button>
@@ -98,9 +101,14 @@ function LeadList({ me, onOpen, onNew }) {
 function LeadDetail({ me, id, go, onBack, onEdit }) {
   const { data: l, error, reload } = useApi(`/api/leads/${id}`);
   const lists = useChecklists();
+  const [sendErr, setSendErr] = useState(null);
   if (error && !l) return <p className="empty">Couldn't load the lead: {error}</p>;
   if (!l) return <p className="empty">Loading lead…</p>;
   const setStatus = (status, reason) => api(`/api/leads/${id}/status`, { method: "POST", body: { status, reason } }).then(reload);
+  const send = (what) => {
+    setSendErr(null);
+    api(`/api/leads/${id}/${what}`, { method: "POST", body: {} }).then(reload, (e) => setSendErr(e.message));
+  };
 
   return (
     <div className="detail sales">
@@ -125,6 +133,32 @@ function LeadDetail({ me, id, go, onBack, onEdit }) {
 
       <section className="panel">
         <h3>What's next</h3>
+        {l.status === "new" &&
+          (l.sent_at ? (
+            <p className="help">
+              Sent to estimating by {l.sent_by ?? "sales"} on {fmtDate(l.sent_at)}.{" "}
+              <button className="link" onClick={() => send("unsend")}>
+                Take it back to finish it
+              </button>
+            </p>
+          ) : (
+            <div className="send-box">
+              <p>
+                <b>Wrapped up?</b> Send it to the estimators. It shows up on their Estimates tab as a new lead to estimate.
+              </p>
+              {l.checklist && l.checklist.done < l.checklist.total && (
+                <p className="help t-near">
+                  {l.checklist.total - l.checklist.done} checklist question{l.checklist.total - l.checklist.done > 1 ? "s" : ""} not answered:{" "}
+                  {l.checklist.missing.slice(0, 6).join(" · ")}
+                  {l.checklist.missing.length > 6 ? " …" : ""}
+                </p>
+              )}
+              <button className="btn" onClick={() => send("send")}>
+                Send to estimating
+              </button>
+            </div>
+          ))}
+        {sendErr && <p className="err">{sendErr}</p>}
         <div className="action-row">
           {me.estimates && l.status !== "dropped" && l.outcome !== "won" && (
             <button className="btn" onClick={() => go("estimates", { view: "edit", leadId: l.id })}>
@@ -164,6 +198,10 @@ function LeadDetail({ me, id, go, onBack, onEdit }) {
       </section>
 
       <section className="panel">
+        <Photos kind="lead" id={l.id} />
+      </section>
+
+      <section className="panel">
         <div className="panel-head">
           <h3>Site checklist</h3>
           <button className="link" onClick={onEdit}>
@@ -171,7 +209,7 @@ function LeadDetail({ me, id, go, onBack, onEdit }) {
           </button>
         </div>
         {l.scope_type ? (
-          <ChecklistSummary lists={lists} scope={l.scope_type} survey={l.survey} />
+          <ChecklistSummary lists={lists} scope={l.scope_type} courtType={l.court_type} survey={l.survey} />
         ) : (
           <p className="help">Set the scope (resurfacing, repair or new construction) to get its checklist.</p>
         )}
@@ -209,6 +247,7 @@ const blankLead = () => ({
   new_client: null,
   name: "",
   site_address: "",
+  site: blankAddress(),
   parcel_id: "",
   court_type: "",
   scope_type: "",
@@ -227,8 +266,11 @@ function LeadForm({ me, leadId, clientId, onDone, onCancel }) {
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
   const lists = useChecklists();
+  const [pending, setPending] = useState([]); // photos picked before a new lead is saved
+  const [sending, setSending] = useState(null);
   const f = d.form;
   const survey = f.survey ?? { court: blankCourt(), answers: {} };
+  const site = f.site ?? addressFrom({}, "site", f.site_address); // drafts from before the address was split
 
   useEffect(() => {
     api("/api/estimates/people").then(setPeople).catch(() => {});
@@ -240,6 +282,7 @@ function LeadForm({ me, leadId, clientId, onDone, onCancel }) {
         d.discard({
           ...blankLead(), ...l, court_type: l.court_type ?? "", scope_type: l.scope_type ?? "", bid_due: l.bid_due ?? "", salesperson_id: l.salesperson_id ?? "",
           survey: { court: courtForm(l.survey?.court), answers: l.survey?.answers ?? {} },
+          site: addressFrom(l, "site", l.site_address),
         });
         setLoaded(true);
       })
@@ -258,7 +301,7 @@ function LeadForm({ me, leadId, clientId, onDone, onCancel }) {
       const body = {
         client_id,
         name: f.name.trim(),
-        site_address: f.site_address.trim(),
+        ...addressBody(site, "site", "site_address"),
         parcel_id: f.parcel_id.trim(),
         court_type: f.court_type || null,
         scope_type: f.scope_type || null,
@@ -267,10 +310,11 @@ function LeadForm({ me, leadId, clientId, onDone, onCancel }) {
         bid_due: f.bid_due || null,
         salesperson_id: f.salesperson_id || null,
         // the checklist for the scope chosen; left as it was if the questions didn't load
-        survey: lists ? { court: courtBody(survey.court), answers: tidyAnswers(lists.scopes[f.scope_type] ?? [], survey.answers) } : null,
+        survey: lists ? { court: courtBody(survey.court), answers: tidyAnswers(lists.scopes[f.scope_type] ?? [], survey.answers, f.court_type || null) } : null,
       };
       const saved = leadId ? await api(`/api/leads/${leadId}`, { method: "PUT", body }) : await api("/api/leads", { method: "POST", body });
       d.done();
+      if (pending.length) await uploadAll("lead", saved.id, pending, (i, n) => setSending(`Uploading photo ${i} of ${n}…`));
       onDone(saved.id);
     } catch (err) {
       setError(err.status === 0 ? "No connection. Your work is kept on this device; save again when you have signal." : err.message);
@@ -279,7 +323,7 @@ function LeadForm({ me, leadId, clientId, onDone, onCancel }) {
   }
 
   return (
-    <form className="editor" onSubmit={save}>
+    <form className="editor" onSubmit={save} onKeyDown={noEnterSubmit}>
       <button type="button" className="link back" onClick={onCancel}>
         {leadId ? "Back to lead" : "All leads"}
       </button>
@@ -359,11 +403,8 @@ function LeadForm({ me, leadId, clientId, onDone, onCancel }) {
 
       <section className="panel">
         <h3>Where</h3>
+        <AddressFields section="site" value={site} onChange={(v) => d.set("site", v)} />
         <div className="grid">
-          <label className="span-2">
-            Site address
-            <input value={f.site_address} onChange={(e) => d.set("site_address", e.target.value)} placeholder="Street, city, ZIP" />
-          </label>
           <label className="span-2">
             <span>
               Parcel ID <span className="optional">(optional)</span>
@@ -391,6 +432,10 @@ function LeadForm({ me, leadId, clientId, onDone, onCancel }) {
         <LinksField id="lead-links" value={f.links} onChange={(v) => d.set("links", v)} />
       </section>
 
+      <section className="panel">
+        <Photos kind="lead" id={leadId} pending={pending} onPending={setPending} />
+      </section>
+
       {error && (
         <p className="alert" role="alert">
           {error}
@@ -401,7 +446,7 @@ function LeadForm({ me, leadId, clientId, onDone, onCancel }) {
           Cancel
         </button>
         <button className="btn" disabled={saving}>
-          {saving ? "Saving…" : leadId ? "Save changes" : "Save lead"}
+          {saving ? sending ?? "Saving…" : leadId ? "Save changes" : "Save lead"}
         </button>
       </div>
     </form>

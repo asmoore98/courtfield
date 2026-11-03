@@ -32,7 +32,9 @@ export default function SettingsView() {
     setError(null);
     setSaving(true);
     try {
-      const body = Object.fromEntries([...FIELDS.map(([k]) => [k, f[k] ?? ""]), ["proposal_terms", f.proposal_terms ?? ""]]);
+      const body = Object.fromEntries([
+        ...FIELDS.map(([k]) => [k, f[k] ?? ""]), ["proposal_terms", f.proposal_terms ?? ""], ["drive_folder_url", f.drive_folder_url ?? ""],
+      ]);
       body.estimate_valid_days = Number(f.estimate_valid_days) || 30;
       setF(await api("/api/company", { method: "PATCH", body }));
       setSaved(true);
@@ -62,6 +64,17 @@ export default function SettingsView() {
             <textarea rows={6} value={f.proposal_terms ?? ""} onChange={(e) => set("proposal_terms", e.target.value)} />
           </label>
         </div>
+      </section>
+      <section className="panel">
+        <h3>Google Drive</h3>
+        <label className="span-2">
+          Company Drive folder
+          <span className="help field-help">
+            The "Open Google Drive" button next to every link box opens this folder. Open the folder in Drive and copy the address from the browser. Blank opens
+            Google Drive's home page.
+          </span>
+          <input value={f.drive_folder_url ?? ""} onChange={(e) => set("drive_folder_url", e.target.value)} placeholder="https://drive.google.com/drive/folders/…" />
+        </label>
       </section>
       <section className="panel">
         <h3>Estimates</h3>

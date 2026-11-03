@@ -46,7 +46,7 @@ def get_timesheet_csv(week: str | None = None, user: User = Depends(payroll_role
 
 
 PROPOSAL_FIELDS = ("proposal_name", "proposal_address", "proposal_phone", "proposal_email", "proposal_license",
-                   "proposal_logo_url", "proposal_terms")
+                   "proposal_logo_url", "proposal_terms", "drive_folder_url")
 
 
 class CompanyOut(BaseModel):
@@ -60,6 +60,7 @@ class CompanyOut(BaseModel):
     proposal_license: str = ""
     proposal_logo_url: str = ""
     proposal_terms: str = ""
+    drive_folder_url: str = ""
     estimate_valid_days: int = 30
 
 
@@ -73,6 +74,7 @@ class CompanyEdit(BaseModel):
     proposal_license: str | None = Field(default=None, max_length=100)
     proposal_logo_url: str | None = Field(default=None, max_length=500)
     proposal_terms: str | None = Field(default=None, max_length=10000)
+    drive_folder_url: str | None = Field(default=None, max_length=500)
     estimate_valid_days: int | None = Field(default=None, ge=1, le=365)
 
 

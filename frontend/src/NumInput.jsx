@@ -52,8 +52,15 @@ export default function NumInput({ value, onChange, decimals = 2, className, ...
       className={className}
       value={shown}
       onChange={(e) => {
-        caret.current = keyCharsBefore(e.target.value, e.target.selectionStart ?? e.target.value.length);
-        onChange(clean(e.target.value, decimals));
+        let v = clean(e.target.value, decimals);
+        let before = keyCharsBefore(e.target.value, e.target.selectionStart ?? e.target.value.length);
+        // ".5" is kept as "0.5", with the cursor after what was typed (not between the 0 and the dot)
+        if (v.startsWith(".")) {
+          v = "0" + v;
+          before += 1;
+        }
+        caret.current = before;
+        onChange(v);
       }}
     />
   );

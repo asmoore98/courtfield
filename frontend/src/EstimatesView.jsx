@@ -8,8 +8,9 @@ import { ChecklistSummary, blankCourt, courtBody, courtForm, tasksFromChecklist 
 import { UNIT_SHORT, courtAreas, fmt, rateText } from "./qty";
 import { useLibrary } from "./library";
 import {
-  ActivityList, COURT_LABEL, ESTIMATE_STATUS, LinkList, LinksField, NoteAction, SCOPE_LABEL, StatusChip, fmtDate, fmtWhen, money0, useApi, useScreen,
+  ActivityList, COURT_LABEL, ESTIMATE_STATUS, addressFrom, LinkList, LinksField, NoteAction, SCOPE_LABEL, StatusChip, fmtDate, fmtWhen, money0, useApi, useScreen,
 } from "./bits";
+import Photos from "./Photos";
 import ProposalView from "./ProposalView";
 
 const SCREEN_KEY = "cf.estimates.screen";
@@ -46,13 +47,16 @@ export default function EstimatesView({ me, go, initial }) {
         onProposal={() => setScreen({ view: "proposal", id: screen.id })}
       />
     );
-  return <EstimateList me={me} onOpen={open} onNew={() => setScreen({ view: "edit" })} />;
+  return <EstimateList me={me} go={go} onOpen={open} onNew={() => setScreen({ view: "edit" })} />;
 }
 
 // ---------- list ----------
 
-function EstimateList({ me, onOpen, onNew }) {
+function EstimateList({ me, go, onOpen, onNew }) {
   const { data, error } = useApi("/api/estimates");
+  const leads = useApi(me.estimates ? "/api/leads" : null);
+  // Leads sales has wrapped up and sent over, with no estimate started yet.
+  const toEstimate = (leads.data ?? []).filter((l) => l.sent_at && l.status === "new").sort((a, b) => (a.sent_at < b.sent_at ? -1 : 1));
   const [filter, setFilter] = useState("open");
   if (error && !data) return <p className="empty">Couldn't load estimates: {error}</p>;
   if (!data) return <p className="empty">Loading estimates…</p>;
@@ -72,6 +76,34 @@ function EstimateList({ me, onOpen, onNew }) {
           </button>
         )}
       </div>
+
+      {toEstimate.length > 0 && (
+        <section className="panel new-leads">
+          <h3>New leads to be estimated</h3>
+          <ul className="row-list">
+            {toEstimate.map((l) => (
+              <li key={l.id}>
+                <button className="row-btn" onClick={() => go("leads", { view: "lead", id: l.id })}>
+                  <span className="row-main">
+                    <b>{l.client_name}</b> · {l.name}
+                    <span className="sub">
+                      Sent by {l.sent_by ?? "sales"} {fmtDate(l.sent_at)}
+                      {l.bid_due && ` · Bid due ${fmtDate(l.bid_due + "T12:00:00")}`}
+                    </span>
+                  </span>
+                  <span className="row-side">
+                    {l.checklist && (
+                      <span className={`sub${l.checklist.done < l.checklist.total ? " t-near" : ""}`}>
+                        Checklist {l.checklist.done}/{l.checklist.total}
+                      </span>
+                    )}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {followUps.length > 0 && (
         <section className="panel follow-ups">
@@ -142,6 +174,7 @@ function EstimateDetail({ me, id, go, onBack, onEdit, onProposal }) {
   const [pick, setPick] = useState(null); // version number being viewed; null = current
   const [actError, setActError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [sending, setSending] = useState(null); // "send" | "resend": reading what the customer gets first
   const viewing = pick ?? e?.version;
   const old = useApi(me.estimates && e && pick && pick !== e.version ? `/api/estimates/${id}/versions/${pick}` : null);
 
@@ -257,7 +290,7 @@ function EstimateDetail({ me, id, go, onBack, onEdit, onProposal }) {
               </button>
             )}
             {["draft", "lost", "no_bid"].includes(e.status) && (
-              <button className="btn-ghost" disabled={busy} onClick={() => setStatus("sent").catch(() => {})}>
+              <button className="btn-ghost" disabled={busy} onClick={() => setSending("send")}>
                 Mark sent to client
               </button>
             )}
@@ -265,7 +298,9 @@ function EstimateDetail({ me, id, go, onBack, onEdit, onProposal }) {
               <>
                 <NoteAction label="Mark won" prompt="Anything to note? (signed date, deposit…) Next you'll make it a job." required={false} onSubmit={(n) => setStatus("won", n)} />
                 <NoteAction label="Log a follow-up" prompt="Who did you talk to and what did they say?" placeholder="Called Dana, board votes on the 15th" onSubmit={(n) => act(() => api(`/api/estimates/${id}/follow-up`, { method: "POST", body: { note: n } }))} />
-                <NoteAction label="Re-send" prompt="What changed? (restarts the 30-day clock)" required={false} onSubmit={(n) => setStatus("sent", n)} />
+                <button className="btn-ghost" disabled={busy} onClick={() => setSending("resend")}>
+                  Re-send
+                </button>
                 <NoteAction label="Mark lost" tone="danger" prompt="Why did we lose it? (price, timing, went with someone else…)" onSubmit={(n) => setStatus("lost", n)} />
               </>
             )}
@@ -289,6 +324,18 @@ function EstimateDetail({ me, id, go, onBack, onEdit, onProposal }) {
               Proposal (print / PDF)
             </button>
           </div>
+        )}
+        {sending && (
+          <SendReview
+            id={id}
+            resend={sending === "resend"}
+            onCancel={() => setSending(null)}
+            onSend={(note) =>
+              act(() => api(`/api/estimates/${id}/status`, { method: "POST", body: { status: "sent", note, checked_customer_text: true } })).then(() =>
+                setSending(null)
+              )
+            }
+          />
         )}
         {actError && (
           <p className="alert" role="alert">
@@ -338,6 +385,10 @@ function EstimateDetail({ me, id, go, onBack, onEdit, onProposal }) {
         ) : (
           <VersionSummary d={shownData} t={shownTotals} />
         )}
+      </section>
+
+      <section className="panel">
+        <Photos kind="estimate" id={e.id} />
       </section>
 
       <ActivityList items={e.activity} />
@@ -472,6 +523,79 @@ function VersionSummary({ d, t }) {
   );
 }
 
+/* Before an estimate is marked sent: everything the customer will read on the
+   proposal, so a note meant for the office can't slip out to them. */
+function SendReview({ id, resend, onSend, onCancel }) {
+  const { data: p, error } = useApi(`/api/estimates/${id}/proposal`);
+  const [ok, setOk] = useState(false);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="send-review">
+      <h4>Read what the customer will see</h4>
+      {error && <p className="err">{error}</p>}
+      {!p ? (
+        <p className="help">Loading the proposal…</p>
+      ) : (
+        <dl className="review-list">
+          <div>
+            <dt>Price</dt>
+            <dd>{money0(p.price)}</dd>
+          </div>
+          {p.fees?.length > 0 && (
+            <div>
+              <dt>Fees listed as included</dt>
+              <dd>{p.fees.map((f) => `${f.description}: ${money0(f.amount)}`).join(" · ")}</dd>
+            </div>
+          )}
+          <div>
+            <dt>Scope of work</dt>
+            <dd className="pre">{p.scope_text || <i>Empty</i>}</dd>
+          </div>
+          <div>
+            <dt>Work included</dt>
+            <dd>{p.work_items.join(", ") || <i>None</i>}</dd>
+          </div>
+          <div>
+            <dt>Not included</dt>
+            <dd className="pre">{p.exclusions || <i>Empty</i>}</dd>
+          </div>
+          <div className={p.notes ? "review-notes" : undefined}>
+            <dt>Notes for the customer</dt>
+            <dd className="pre">{p.notes || <i>None</i>}</dd>
+          </div>
+        </dl>
+      )}
+      {resend && (
+        <label>
+          What changed? <span className="optional">(restarts the 30-day clock)</span>
+          <input value={note} onChange={(e) => setNote(e.target.value)} maxLength={1000} />
+        </label>
+      )}
+      <label className="check">
+        <input type="checkbox" checked={ok} onChange={(e) => setOk(e.target.checked)} disabled={!p} /> I've read all of it, and it's all right for the customer
+        to see.
+      </label>
+      <div className="note-buttons">
+        <button type="button" className="btn-ghost" onClick={onCancel}>
+          Cancel
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={!ok || busy}
+          onClick={() => {
+            setBusy(true);
+            onSend(note.trim()).catch(() => setBusy(false));
+          }}
+        >
+          {resend ? "Re-send" : "Mark sent"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ---------- the estimate form ----------
 
 const blankEstimate = (lib, extra = {}) => ({
@@ -490,6 +614,7 @@ const blankEstimate = (lib, extra = {}) => ({
   exclusions: "",
   links: "",
   notes: "",
+  customer_notes: "",
   note: "",
   ...extra,
 });
@@ -523,6 +648,7 @@ function EstimateEditor({ me, go, estimateId, leadId, onDone, onCancel }) {
         client_id: lead.client_id,
         name: lead.name,
         address: lead.site_address,
+        site: addressFrom(lead, "site", lead.site_address),
         parcel_id: lead.parcel_id,
         court_type: lead.court_type ?? "pickleball",
         scope_type: lead.scope_type ?? "resurfacing",
@@ -536,13 +662,14 @@ function EstimateEditor({ me, go, estimateId, leadId, onDone, onCancel }) {
   // with the footage, nets "no" → no net task.
   const starter = (court, scope, lib) => {
     const tasks = starterTasks(court, scope, lib);
-    return lead && !e ? tasksFromChecklist(tasks, sections, lead.survey, (name) => taskFromLibrary(name, lib)) : tasks;
+    return lead && !e ? tasksFromChecklist(tasks, sections, lead.survey, (name) => taskFromLibrary(name, lib), court) : tasks;
   };
   const loaded = e && carryOverPrice({
     ...formFrom({
       name: e.name,
       client: "",
       address: e.data.site_address,
+      ...Object.fromEntries(["street", "city", "state", "zip"].map((k) => [`site_${k}`, e.data[`site_${k}`] ?? ""])),
       parcel_id: e.data.parcel_id,
       lat: e.data.lat,
       lng: e.data.lng,
@@ -563,6 +690,7 @@ function EstimateEditor({ me, go, estimateId, leadId, onDone, onCancel }) {
     exclusions: e.data.exclusions,
     links: e.data.links,
     notes: e.data.notes,
+    customer_notes: e.data.customer_notes ?? "",
     note: "",
     priced: e.data.priced ?? "typed",
     markups: e.data.markups ? Object.fromEntries(Object.entries(e.data.markups).map(([k, v]) => [k, String(v)])) : null,
@@ -593,7 +721,8 @@ function EstimateEditor({ me, go, estimateId, leadId, onDone, onCancel }) {
               </button>
             </div>
             <p className="help">From the site checklist on the lead. The court size and the tasks it points to are already filled in below.</p>
-            <ChecklistSummary lists={lists} scope={lead.scope_type} survey={lead.survey} />
+            <ChecklistSummary lists={lists} scope={lead.scope_type} courtType={lead.court_type} survey={lead.survey} />
+            <Photos kind="lead" id={lead.id} canAdd={false} title="Photos from the lead" />
           </section>
         ) : null
       }
@@ -654,18 +783,34 @@ function EstimateEditor({ me, go, estimateId, leadId, onDone, onCancel }) {
               <textarea rows={2} value={f.exclusions} onChange={(ev) => set("exclusions", ev.target.value)} placeholder="Permits, lighting, landscaping repair…" />
             </label>
             <LinksField id="est-links" value={f.links} onChange={(v) => set("links", v)} />
-            <label>
-              Internal notes <span className="optional">(never on the proposal)</span>
-              <textarea rows={3} value={f.notes} onChange={(ev) => set("notes", ev.target.value)} />
-            </label>
           </div>
         </section>
       )}
       footer={(f, set) => (
+        <>
+        <section className="panel notes-panel">
+          <h3>Notes</h3>
+          <label className="note-internal">
+            <span>
+              Internal notes <span className="tag-internal">Our side only. Never printed.</span>
+            </span>
+            <span className="help field-help">Anything the office should know: the client, the site, what to watch for.</span>
+            <textarea rows={4} value={f.notes} onChange={(ev) => set("notes", ev.target.value)} />
+          </label>
+          <label className="note-customer">
+            <span>
+              Notes for the customer <span className="tag-customer">Prints on the proposal. The customer reads this.</span>
+            </span>
+            <span className="help field-help">Things the customer needs to know: access, scheduling, what they need to have ready.</span>
+            <textarea rows={3} value={f.customer_notes ?? ""} onChange={(ev) => set("customer_notes", ev.target.value)} />
+          </label>
+          <p className="help">Before it's marked sent, you'll see everything the customer gets and tick that it's all right.</p>
+        </section>
         <label className="version-note">
-          {e ? `What changed in v${nextV}?` : "Note (optional)"}
+          {e ? `What changed in v${nextV}?` : "Note on this version (optional)"}
           <input value={f.note} onChange={(ev) => set("note", ev.target.value)} placeholder={e ? "e.g. Dropped lighting, fence to 10 ft" : ""} maxLength={1000} />
         </label>
+        </>
       )}
       validate={(f) => {
         if (!f.client_id) return { message: "Choose a client at the top, or pick “+ New client”." };
@@ -678,6 +823,10 @@ function EstimateEditor({ me, go, estimateId, leadId, onDone, onCancel }) {
         const client_id = await saveClient(f.client_id, f.new_client);
         const data = {
           site_address: body.address,
+          site_street: body.site_street,
+          site_city: body.site_city,
+          site_state: body.site_state,
+          site_zip: body.site_zip,
           parcel_id: body.parcel_id,
           lat: body.lat,
           lng: body.lng,
@@ -698,6 +847,7 @@ function EstimateEditor({ me, go, estimateId, leadId, onDone, onCancel }) {
           exclusions: f.exclusions,
           links: f.links,
           notes: f.notes,
+          customer_notes: (f.customer_notes ?? "").trim(),
         };
         const payload = {
           client_id,
