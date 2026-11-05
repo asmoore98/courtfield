@@ -24,6 +24,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -157,6 +158,9 @@ class User(Base):
     # When this person acknowledged that their phone shares its location with
     # the office while their crew is on the clock. Kept as a record of notice.
     location_notice_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Settings each person sets for themselves (Settings tab).
+    phone: Mapped[str] = mapped_column(String(40), default="", server_default="")
+    prefs: Mapped[str] = mapped_column(Text, default="{}", server_default="{}")  # JSON: theme, text size, start tab
 
 
 class DeviceSession(Base):
@@ -305,6 +309,9 @@ class StockItem(Base):
     track_stock: Mapped[bool] = mapped_column(default=True)
     active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    coverage_sf: Mapped[float | None] = mapped_column(Float, nullable=True)  # SF one unit covers, per coat (coatings)
+    # From the starter list: a ballpark price to check before relying on it.
+    starter_price: Mapped[bool] = mapped_column(default=False, server_default=false())
 
 
 class CostLine(Base):
@@ -613,6 +620,11 @@ class TaskTemplate(Base):
     unit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     coats: Mapped[float | None] = mapped_column(Float, nullable=True)  # usual number of coats (SF per coat tasks)
     notes: Mapped[str] = mapped_column(Text, default="")
+    # Priced by the unit, all in, when it goes on an estimate (otherwise built up).
+    all_in: Mapped[bool] = mapped_column(default=False, server_default=false())
+    # What the task brings onto an estimate: materials, machine time, fees
+    # (JSON list; see routers/library.py PartIn).
+    parts: Mapped[str] = mapped_column(Text, default="[]", server_default="[]")
     active: Mapped[bool] = mapped_column(default=True)
     created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -778,3 +790,27 @@ class MaterialCheck(Base):
     checked_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     checked_by: Mapped[User] = relationship()
+
+
+class Feedback(Base):
+    """A suggestion or a problem with the app, from anyone on the team, with
+    screenshots (photos of kind "feedback"). Emailed to whoever looks after
+    the app, and listed for the GM."""
+
+    __tablename__ = "feedback"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    kind: Mapped[str] = mapped_column(String(10), default="idea")  # idea | problem
+    text: Mapped[str] = mapped_column(Text)
+    page: Mapped[str] = mapped_column(String(100), default="")     # where in the app it's about
+    device: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)     # submitted with its screenshots
+    emailed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    email_error: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(10), default="new")  # new | seen | done
+    reply: Mapped[str] = mapped_column(Text, default="")
+
+    user: Mapped[User] = relationship()

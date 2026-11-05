@@ -166,6 +166,9 @@ def seed() -> None:
         if track and start_qty:
             db.add(StockMove(company_id=co.id, kind=MoveKind.receive, item_id=items[name].id, description=name, unit=unit,
                              quantity=start_qty, unit_cost=cost, recorded_by_id=gm.id, note="Opening count (sample)"))
+    # The rest of the starter material list (ballpark prices, marked to check).
+    from .materials_starter import add_starter_materials
+    add_starter_materials(db, co.id)
 
     today = utcnow().date()
     lead1, lead2 = users["dev-lead-1"], users["dev-lead-2"]
@@ -335,8 +338,16 @@ def _seed_sales(db, co, users) -> None:
 
 def _seed_library(db, co, users) -> None:
     """Starter task list, a few sample subs, and made-up default rates."""
+    import json
+
+    from sqlalchemy import select
+
     from .library_starter import STARTER_TASKS, STARTER_UNITS
-    from .models import Subcontractor, TaskTemplate
+    from .materials_starter import STARTER_PARTS
+    from .models import StockItem, Subcontractor, TaskTemplate
+
+    db.flush()
+    items = {i.name.lower(): i.id for i in db.scalars(select(StockItem).where(StockItem.company_id == co.id))}
 
     gm = users["dev-gm"]
     co.default_cost_rate, co.default_charge_rate = 34.0, 68.0
@@ -354,9 +365,10 @@ def _seed_library(db, co, users) -> None:
         cost, charge = sample_rates.get(name, (None, None))
         unit, coats = STARTER_UNITS.get(name, ("hr", None))
         rate, price = sample_units.get(name, (None, None))
+        parts = [p | {"item_id": items.get(p["description"].lower())} for p in STARTER_PARTS.get(name, [])]
         db.add(TaskTemplate(company_id=co.id, name=name, aliases="\n".join(aliases), task_type=ttype, kind=kind,
                             cost_rate=cost, charge_rate=charge, unit=unit, coats=coats, production_rate=rate, unit_price=price,
-                            created_by_id=gm.id))
+                            parts=json.dumps(parts), created_by_id=gm.id))
     for name, trade, phone in [("A1 Fence (sample)", "Fence", "(555) 010-0201"), ("Bright Lights Electric (sample)", "Lighting / electrical", "(555) 010-0202"),
                                ("Coastal Paving (sample)", "Asphalt and concrete", "(555) 010-0203")]:
         db.add(Subcontractor(company_id=co.id, name=name, trade=trade, phone=phone, created_by_id=gm.id))

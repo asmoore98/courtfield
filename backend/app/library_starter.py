@@ -116,7 +116,7 @@ STARTER_UNITS: dict[str, tuple[str, float | None]] = {
     "Clearing and grubbing, grass": ("acre", None), "Clearing and grubbing, light brush": ("acre", None),
     "Clearing and grubbing, heavy woods": ("acre", None), "Demolition of existing court": ("sf", None),
     "Excavation and haul-off": ("cy", None), "Rough grading": ("acre", None), "Subgrade compaction": ("sf", None),
-    "Base rock install": ("sf", None), "Fine grading": ("acre", None), "Irrigation relocation": ("ls", None),
+    "Base rock install": ("ton", None), "Fine grading": ("acre", None), "Irrigation relocation": ("ls", None),
     "French drain": ("lf", None), "Drain pipe and inlets": ("lf", None),
     "Asphalt paving": ("sf", None), "Asphalt overlay": ("sf", None), "Asphalt patching": ("sf", None),
     "Court slab: forms": ("lf", None), "Court slab: vapor barrier": ("sf", None), "Court slab: rebar and mesh": ("sf", None),

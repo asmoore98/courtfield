@@ -21,16 +21,17 @@ from ..models import JobTask, Photo, Role, User, utcnow
 router = APIRouter(prefix="/api/photos", tags=["photos"])
 # Leads and estimates: the sales side. Jobs: the crew lead on it and the office.
 WHO = {"lead": SALES_SIDE, "estimate": SALES_SIDE, "job": EDITS_JOBS | {Role.crew_lead, Role.owner},
-       "task": EDITS_JOBS | {Role.crew_lead, Role.owner}}  # a task on a job: done or partly done
+       "task": EDITS_JOBS | {Role.crew_lead, Role.owner},  # a task on a job: done or partly done
+       "feedback": set(Role)}  # screenshots in the suggestion box: whoever sent it, and the GM
 
 MAX_PHOTO = 4 * 1024 * 1024   # after the phone shrinks it; well over what it sends
 MAX_THUMB = 400 * 1024
 MAX_PER_SUBJECT = 300
-KINDS = ("lead", "estimate", "job", "task")
+KINDS = ("lead", "estimate", "job", "task", "feedback")
 
 
 class PhotoIn(BaseModel):
-    kind: str = Field(pattern="^(lead|estimate|job|task)$")
+    kind: str = Field(pattern="^(lead|estimate|job|task|feedback)$")
     subject_id: str = Field(min_length=1, max_length=36)
     name: str = Field(default="", max_length=200)
     caption: str = Field(default="", max_length=500)
@@ -81,6 +82,9 @@ def check_subject(db: Session, user: User, kind: str, subject_id: str):
             raise HTTPException(404, "Task not found")
         load_job(db, user, t.job_id)  # a crew lead: only their own jobs
         return t
+    if kind == "feedback":
+        from .account import load_feedback
+        return load_feedback(db, user, subject_id)
     if kind == "lead":
         from .leads import load_lead
         return load_lead(db, user, subject_id)
@@ -102,7 +106,7 @@ def _live(db: Session, company_id: str, kind: str, subject_id: str) -> list[Phot
 
 
 @router.get("")
-def list_photos(kind: str = Query(pattern="^(lead|estimate|job|task)$"), id: str = Query(max_length=36),
+def list_photos(kind: str = Query(pattern="^(lead|estimate|job|task|feedback)$"), id: str = Query(max_length=36),
                 user: User = Depends(current_user), db: Session = Depends(get_db)):
     subject = check_subject(db, user, kind, id)
     out = [photo_out(p, user) for p in _live(db, user.company_id, kind, id)]
@@ -124,7 +128,7 @@ def add_photo(body: PhotoIn, user: User = Depends(current_user), db: Session = D
     db.flush()
     if body.kind == "task":  # in the job's history, saying which task
         log(db, user, "job", subject.job_id, f"Added a photo to {subject.name}", p.name)
-    else:
+    elif body.kind != "feedback":
         log(db, user, body.kind, body.subject_id, "Added a photo", p.name)
     db.commit()
     return photo_out(p, user)

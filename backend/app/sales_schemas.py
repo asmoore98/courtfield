@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from .addresses import fill
 from .models import CourtType, EstimateStatus, LeadStatus, ScopeType, TaskKind
-from .quantities import material_qty, worked_hours
+from .quantities import material_qty, per_task_qty, task_units, worked_hours
 from .schemas import CostLineIn, TaskIn
 
 LONG = 5000
@@ -36,28 +36,44 @@ class ClientActiveIn(BaseModel):
 
 
 class CourtInfo(BaseModel):
-    """The court's size, entered once. Surface SF is courts x length x width
+    """The court's size, entered once. Length and width are the playing
+    area (e.g. 94 x 50); a border band around it (e.g. 5 ft all around) makes
+    the surfaced size (104 x 60). Surface SF is courts x the surfaced size
     unless someone typed a measured total; paintable SF is the surface unless
-    it's different (e.g. a strip outside the fence that isn't coated)."""
+    it's different (e.g. a strip outside the fence that isn't coated). Lines
+    go on the playing area; the border can be its own color."""
 
     courts: int | None = Field(default=None, ge=0, le=200)
     length_ft: float | None = Field(default=None, ge=0, le=5000)
     width_ft: float | None = Field(default=None, ge=0, le=5000)
+    border_ft: float | None = Field(default=None, ge=0, le=500)  # band all around each court
     surface_sf: float | None = Field(default=None, ge=0, le=10_000_000)  # typed total, overrides the math
     paint_sf: float | None = Field(default=None, ge=0, le=10_000_000)    # typed paintable area
+
+    def playing(self) -> float | None:
+        if self.length_ft and self.width_ft:
+            return round(self.length_ft * self.width_ft * (self.courts if self.courts else 1), 2)
+        return None
 
     def surface(self) -> float | None:
         if self.surface_sf is not None:
             return self.surface_sf
         if self.length_ft and self.width_ft:
-            return round(self.length_ft * self.width_ft * (self.courts if self.courts else 1), 2)
+            b = 2 * (self.border_ft or 0)
+            return round((self.length_ft + b) * (self.width_ft + b) * (self.courts if self.courts else 1), 2)
         return None
+
+    def border(self) -> float | None:
+        s, p = self.surface(), self.playing()
+        if s is None or p is None or not self.border_ft:
+            return None
+        return round(max(0.0, s - p), 2)
 
     def paint(self) -> float | None:
         return self.paint_sf if self.paint_sf is not None else self.surface()
 
     def amount(self, follows: str) -> float | None:
-        return {"surface": self.surface, "paint": self.paint,
+        return {"surface": self.surface, "paint": self.paint, "playing": self.playing, "border": self.border,
                 "courts": lambda: float(self.courts) if self.courts else None}[follows]()
 
 
@@ -163,7 +179,7 @@ class EstimateData(BaseModel):
         """Quantities that follow the court size are filled in here, so they're
         always right whatever the screen sent."""
         for t in self.tasks:
-            if t.follows and t.kind == TaskKind.crew:
+            if t.follows and t.follows not in ("size", "task") and t.kind == TaskKind.crew:
                 amt = self.court.amount(t.follows)
                 if amt is not None:
                     t.quantity = amt
@@ -171,10 +187,13 @@ class EstimateData(BaseModel):
                     if h is not None:
                         t.estimated_hours = h
         for ln in self.cost_lines:
-            if ln.follows in ("surface", "paint") and ln.coverage:
+            if ln.follows in ("surface", "playing", "border", "paint") and ln.coverage:
                 amt = self.court.amount(ln.follows)
                 if amt is not None:
                     ln.quantity = material_qty(amt, ln.coats, ln.coverage)
+            elif ln.follows == "task" and ln.task_index is not None and ln.task_index < len(self.tasks):
+                t = self.tasks[ln.task_index]
+                ln.quantity = per_task_qty(task_units(t), ln.per_amount, ln.per_every, ln.category.value)
         return self
 
     @model_validator(mode="after")

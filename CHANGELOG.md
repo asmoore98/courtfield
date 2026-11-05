@@ -6,6 +6,46 @@ To undo a whole batch after it's merged: open its pull request on GitHub and cli
 
 ---
 
+## v0.7.0 — Batch 5: Built-up task prices, settings, suggestion box, phone menu, dark mode
+
+**Date:** November 5, 2026 · **Branch:** `drew/batch5-pricing` · **By:** Drew Moore
+
+The framework for pricing tasks from their parts (real prices come later, once the company's numbers are in), a Settings page for everyone with a suggestion box, and a cleaner look on phones.
+
+### What changed
+
+| Change | Why | Where |
+|---|---|---|
+| **Two ways to price a crew task** on an estimate: **Built up** (the labor at its rate plus each material, machine or other line with its markup; the default, and how every saved estimate already works) or **By the unit, all in** (one price per acre, ton, SF… covers everything; the task's materials and machine time are our cost inside it, and its markup is over all of it) | "Some tasks are simply priced by the unit; others are built up. The estimator picks per task" | `totals()` in `routers/estimates.py`, `estimateOf()` and `TaskRow` in `JobEditor.jsx` |
+| **One markup for a built-up task:** "Markup on all of it" sets the labor and every line on that task in one go | Price the whole task, not each piece | `JobEditor.jsx` |
+| **Price breakdown** gets a "Priced by the unit, all in" row, so labor and materials show their own markups | An all-in price was showing as a huge labor markup | `PriceTable` in `JobEditor.jsx` |
+| **Quantities from a size:** a task measured in SF, SY, CY or tons can be worked out from length × width (× depth for CY and tons, with tons per CY, 1.4 to start). E.g. 120 × 60 ft × 4 in = 88.9 CY = 124.4 tons | Base rock and fill by length × width × depth | `size_quantity` in `quantities.py`, `qty.js`, `TaskRow` |
+| **Lines that follow their task:** any line on a task can be "this much for every so many of the task": 1.05 ton of rock for every ton (waste), 1 truckload for every 20 ton, 1 pail for every 600 SF a coat. Per load or batch counts whole loads; materials are bought in whole units | Machine time per load, material per unit, worked out instead of typed | `per_task_qty`, line editor in `JobEditor.jsx` |
+| **Court border band:** length × width is the playing area; "Border all around (ft)" makes the surfaced size (94 × 50 + 5 ft = 104 × 60). Tasks and paint can follow the surface, the playing area, the border band or the paintable area, so the border can be its own color | Many courts have a border | `CourtInfo` in `sales_schemas.py`, `Checklist.jsx`, `qty.js` |
+| **Library tasks bring their parts:** the GM sets what a task brings onto an estimate (materials, machine time, fees, with amounts per unit of the task) and whether it's priced all in. Picking the task on an estimate adds those lines; they can be changed there. Starter tasks come with ballpark parts (base rock, resurfacer, color, lines, crack fill, concrete…); "Add the starter parts" fills them in for tasks that have none | Tasks bring their materials | `TaskTemplate.parts`, `routers/library.py`, `LibraryView.jsx`, `linesFromParts` in `library.js` |
+| **Starter material list:** about 35 common items (acrylics, base rock, concrete, rebar, asphalt, fence, nets, rentals) with ballpark prices, each marked **Starter price** until someone fixes it or taps "It's right". Coatings carry how many SF one unit covers | Something to price from on day one; real prices replace them | `materials_starter.py`, `routers/materials.py`, `MaterialsView.jsx` |
+| **Settings for everyone** (menu → Settings and suggestions): your name and phone, light or dark screen (or match the phone), normal or large text, which tab the app opens on, change your password (signs out your other devices), and where you're signed in with "sign out everywhere else". The GM's company settings are underneath | Nothing in Settings didn't feel legit | `routers/account.py`, `SettingsView.jsx`, `prefs.js` |
+| **Suggestion box:** an idea or "something's wrong", where in the app, and screenshots. It's saved, listed for the GM (mark seen / done), and emailed with the screenshots attached once email is set up on the server (see below) | Direct feedback from the people using it | `Feedback` model, `routers/account.py`, `mailer.py`, `SettingsView.jsx` |
+| **Phone menu:** on a phone the row of tabs is gone; the header shows the page you're on and a ⋯ button that opens the list of pages, Settings and Sign out. Red counts show on the button. Desktop keeps the tabs | Too cluttered and unprofessional on a phone | `App.jsx`, `styles.css` |
+| **Dark mode** across the app, and small polish: header, menu, links and form fields | Easier on the eyes, looks finished | `styles.css` |
+| Tests: pricing math (built up, all in, sizes, per-load machine time, border), library parts and starter materials, settings, the suggestion box and building the email. 119 pass | Keep it working | `tests/test_pricing.py`, `tests/test_account.py` |
+
+### Database change
+
+Migration `f4c2a9b7e3d1`: `all_in` and `parts` on task templates; `coverage_sf` and `starter_price` on price-list items; `phone` and `prefs` on people; new table `feedback`. Nothing existing changes: saved estimates price exactly as before (they're all "built up"). Tested up, down and up on Postgres with data.
+
+### After it goes live
+
+1. **Email for the suggestion box** (until this is set, suggestions are only saved in the app): in Render → the web service → **Environment**, add `SMTP_HOST` = `smtp.gmail.com`, `SMTP_PORT` = `587`, `SMTP_USER` = the Gmail address that sends, `SMTP_PASSWORD` = a Google **app password** for that account (Google Account → Security → 2-Step Verification → App passwords), and `FEEDBACK_TO` = where suggestions go. Save; Render restarts it.
+2. GM: Materials → **Add the starter list** if the price list doesn't have it yet, then fix the prices as real quotes come in.
+3. GM: Library → **Add the starter parts** to give the starter tasks their usual materials and machine time.
+
+### How to undo
+
+- **Everything:** revert this pull request on GitHub. To remove the columns and table, run `alembic downgrade d3a8f5c1e9b2` from the Render Shell (deletes suggestions and personal settings).
+
+---
+
 ## v0.6.0 — Batch 4: Jobs out to the field
 
 **Date:** November 5, 2026 · **Branch:** `drew/batch4-field` · **By:** Drew Moore

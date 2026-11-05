@@ -18,15 +18,17 @@ const JOB_KEY = "cf.job";
 
 function useCached(key, path) {
   const [data, setData] = useState(() => safeGet(key, []));
+  const [loaded, setLoaded] = useState(false); // heard from the server (or gave up) at least once
   const load = useCallback(async () => {
     try {
       const d = await api(path);
       setData(d);
       safeSet(key, d);
     } catch {}
+    setLoaded(true);
   }, [key, path]);
   useEffect(() => void load(), [load]);
-  return [data, load];
+  return [data, load, loaded];
 }
 
 const NOTICE_KEY = "cf.locNotice";
@@ -108,7 +110,7 @@ function SyncStatus({ online, pendingCount, lastSync, onSync }) {
 
 export default function FieldView({ me }) {
   const [showMats, setShowMats] = useState(false);
-  const [jobs, reloadJobs] = useCached(JOBS_KEY, "/api/jobs");
+  const [jobs, reloadJobs, jobsLoaded] = useCached(JOBS_KEY, "/api/jobs");
   const [crew] = useCached(CREW_KEY, "/api/crew");
   const [jobId, setJobId] = useState(() => safeGet(JOB_KEY));
   const [selected, setSelected] = useState(new Set());
@@ -189,7 +191,7 @@ export default function FieldView({ me }) {
     setSelected(new Set(ids.filter((id) => crew.some((c) => c.id === id))));
   }, [jobId, notStarted, crew.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!job) return <JobPicker me={me} jobs={jobs} onOpen={setJobId} onRefresh={reloadJobs} />;
+  if (!job) return <JobPicker me={me} jobs={jobs} loaded={jobsLoaded} onOpen={setJobId} onRefresh={reloadJobs} />;
   const started = !!job.started_at || job.status === "active";
   // This job's crew first; anyone else on the team is a tap away.
   const onJob = new Set([job.crew_lead_id, ...(job.crew_members ?? []).map((m) => m.id)].filter(Boolean));
@@ -378,7 +380,7 @@ export default function FieldView({ me }) {
 
 // ---------- the crew lead's list of jobs ----------
 
-function JobPicker({ me, jobs, onOpen, onRefresh }) {
+function JobPicker({ me, jobs, loaded, onOpen, onRefresh }) {
   useEffect(() => void onRefresh(), []); // eslint-disable-line react-hooks/exhaustive-deps
   const lead = me.role === "crew_lead";
   const order = (j) => (j.status === "active" ? 0 : 1);
@@ -387,7 +389,9 @@ function JobPicker({ me, jobs, onOpen, onRefresh }) {
     <div className="field">
       <InstallHint />
       <h2 className="detail-title">{lead ? "Your jobs" : "Open jobs"}</h2>
-      {!list.length ? (
+      {!list.length && !loaded ? (
+        <p className="empty">Loading your jobs…</p>
+      ) : !list.length ? (
         <p className="empty">{lead ? "No jobs sent to you yet. When the office sends you one, it shows up here." : "No open jobs."}</p>
       ) : (
         <ul className="joblist">

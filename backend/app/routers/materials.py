@@ -22,6 +22,7 @@ class ItemIn(BaseModel):
     unit_cost: float = Field(default=0, ge=0, le=10_000_000)
     sku: str = Field(default="", max_length=60)
     track_stock: bool = True
+    coverage_sf: float | None = Field(default=None, ge=0, le=1_000_000)
 
 
 class ItemEdit(BaseModel):
@@ -32,6 +33,8 @@ class ItemEdit(BaseModel):
     sku: str | None = Field(default=None, max_length=60)
     track_stock: bool | None = None
     active: bool | None = None
+    coverage_sf: float | None = Field(default=None, ge=0, le=1_000_000)
+    price_checked: bool | None = None  # true: the starter price has been checked
 
 
 class ItemOut(BaseModel):
@@ -44,6 +47,8 @@ class ItemOut(BaseModel):
     active: bool
     unit_cost: float | None = None   # hidden from roles that don't see dollars
     on_hand: float | None = None     # tracked items only
+    coverage_sf: float | None = None  # SF one unit covers, per coat
+    starter_price: bool = False       # a ballpark price from the starter list, not checked yet
 
 
 class MoveIn(BaseModel):
@@ -91,7 +96,8 @@ class MoveOut(BaseModel):
 def _item_out(i: StockItem, user: User, stock: dict[str, float]) -> ItemOut:
     return ItemOut(id=i.id, name=i.name, category=i.category, unit=i.unit, sku=i.sku, track_stock=i.track_stock, active=i.active,
                    unit_cost=i.unit_cost if user.role in SEES_DOLLARS else None,
-                   on_hand=stock.get(i.id, 0.0) if i.track_stock else None)
+                   on_hand=stock.get(i.id, 0.0) if i.track_stock else None,
+                   coverage_sf=i.coverage_sf, starter_price=bool(i.starter_price) and user.role in SEES_DOLLARS)
 
 
 def _move_out(m: StockMove, user: User, job_names: dict[str, str] | None = None) -> MoveOut:
@@ -152,11 +158,25 @@ def edit_item(item_id: str, body: ItemEdit, user: User = Depends(require_roles(*
         if _name_taken(db, user.company_id, data["name"], i.id):
             raise HTTPException(409, "There's already an item with that name on the price list.")
         data["name"] = data["name"].strip()
+    # A new price, or "the price is right", means it's no longer a ballpark starter price.
+    if data.pop("price_checked", None) or ("unit_cost" in data and data["unit_cost"] != i.unit_cost):
+        i.starter_price = False
+    if "coverage_sf" in data:
+        i.coverage_sf = data.pop("coverage_sf")  # can be cleared
     for k, v in data.items():
         if v is not None:
             setattr(i, k, v)
     db.commit()
     return _item_out(i, user, on_hand(db, user.company_id, [i.id]))
+
+
+@router.post("/items/starter")
+def load_starter_materials(user: User = Depends(require_roles(*EDITS_PRICES)), db: Session = Depends(get_db)):
+    """Add the starter material list (ballpark prices, marked to be checked)."""
+    from ..materials_starter import add_starter_materials
+    added = add_starter_materials(db, user.company_id)
+    db.commit()
+    return {"added": added}
 
 
 # ---------- job material list ----------

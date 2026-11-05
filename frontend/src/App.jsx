@@ -10,6 +10,7 @@ import LeadsView from "./LeadsView";
 import EstimatesView from "./EstimatesView";
 import ClientsView from "./ClientsView";
 import SettingsView from "./SettingsView";
+import { applyPrefs, savedPrefs } from "./prefs";
 import LibraryView from "./LibraryView";
 import { setDriveUrl } from "./bits";
 
@@ -176,6 +177,14 @@ export default function App() {
   const [me, setMe] = useState(() => (getToken() ? safeGet(ME_KEY) : null));
   setDriveUrl(me?.drive_url); // the "Open Google Drive" button next to link boxes
   const [mode, setMode] = useState(null);
+  const [menu, setMenu] = useState(false);
+  useEffect(() => applyPrefs(me?.prefs ?? savedPrefs()), [me?.prefs]);
+  useEffect(() => {
+    if (!menu) return;
+    const esc = (e) => e.key === "Escape" && setMenu(false);
+    window.addEventListener("keydown", esc);
+    return () => window.removeEventListener("keydown", esc);
+  }, [menu]);
   const [invite, setInvite] = useState(inviteToken);
   // Jump to another tab and open something there, e.g. a lead's estimate.
   const [nav, setNav] = useState({ mode: null, screen: null, n: 0 });
@@ -248,7 +257,7 @@ export default function App() {
   const canCrews = !DEMO && !!me.sees_locations;
   const canMaterials = !DEMO && ["gm", "estimator", "pm", "owner", "warehouse"].includes(me.role);
   const canSales = !DEMO && !!me.sales_side;
-  const canSettings = !DEMO && me.role === "gm";
+  const canSettings = !DEMO;
   const canLibrary = !DEMO && !!me.estimates;
   const views = [
     canField && ["field", "Field"],
@@ -261,10 +270,38 @@ export default function App() {
     canMaterials && ["materials", "Materials"],
     canPayroll && ["timesheets", "Timesheets"],
     canTeam && ["team", "Team"],
-    canSettings && ["settings", "Settings"],
   ].filter(Boolean);
-  const view = mode ?? (canOffice ? "office" : canField ? "field" : canSales ? "leads" : "materials");
+  const allViews = canSettings ? [...views, ["settings", "Settings"]] : views;
+  const start = me.prefs?.start && allViews.some(([k]) => k === me.prefs.start) ? me.prefs.start : null;
+  const view = mode ?? start ?? (canOffice ? "office" : canField ? "field" : canSales ? "leads" : "materials");
   const navProps = (m) => (nav.mode === m ? { key: `${m}-${nav.n}`, initial: nav.screen } : { key: m });
+  const open = (key) => {
+    setNav((x) => ({ mode: null, screen: null, n: x.n }));
+    setMode(key);
+    setMenu(false);
+    window.scrollTo(0, 0);
+  };
+  // Little counts on a tab: won estimates to schedule, problems from the site, material asked for.
+  const counts = (key) => (
+    <>
+      {key === "office" && readyCount > 0 && (
+        <span className="tab-count" aria-label={`${readyCount} ready to be scheduled`}>{readyCount}</span>
+      )}
+      {key === "office" && alerts.problems > 0 && (
+        <span className="tab-count warn" aria-label={`${alerts.problems} problems reported from the site`} title="Problems reported from the site">
+          {alerts.problems}
+        </span>
+      )}
+      {key === "materials" && alerts.material_requests > 0 && (
+        <span className="tab-count warn" aria-label={`${alerts.material_requests} material requests waiting`} title="Material asked for from the field">
+          {alerts.material_requests}
+        </span>
+      )}
+    </>
+  );
+  const waiting = alerts.problems + alerts.material_requests + (canOffice ? readyCount : 0);
+  const here = allViews.find(([k]) => k === view)?.[1] ?? "";
+  const initials = me.name.split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 
   return (
     <div className="app">
@@ -272,38 +309,53 @@ export default function App() {
       <header className="topbar">
         <span className="wordmark small">Courtfield</span>
         {views.length > 1 && (
-          <nav className="switch" aria-label="View">
+          <nav className="switch tabs-wide" aria-label="View">
             {views.map(([key, label]) => (
-              <button key={key} aria-pressed={view === key} onClick={() => {
-                  setNav((x) => ({ mode: null, screen: null, n: x.n }));
-                  setMode(key);
-                }}>
+              <button key={key} aria-pressed={view === key} onClick={() => open(key)}>
                 {label}
-                {key === "office" && readyCount > 0 && (
-                  <span className="tab-count" aria-label={`${readyCount} ready to be scheduled`}>
-                    {readyCount}
-                  </span>
-                )}
-                {key === "office" && alerts.problems > 0 && (
-                  <span className="tab-count warn" aria-label={`${alerts.problems} problems reported from the site`} title="Problems reported from the site">
-                    {alerts.problems}
-                  </span>
-                )}
-                {key === "materials" && alerts.material_requests > 0 && (
-                  <span className="tab-count warn" aria-label={`${alerts.material_requests} material requests waiting`} title="Material asked for from the field">
-                    {alerts.material_requests}
-                  </span>
-                )}
+                {counts(key)}
               </button>
             ))}
           </nav>
         )}
-        <span className="who">
-          {me.name}
-          <button className="link" onClick={handleSignOut}>
-            Sign out
+        <span className="here-title" aria-hidden="true">{here}</span>
+        <div className="account">
+          <button className="menu-btn" onClick={() => setMenu((v) => !v)} aria-expanded={menu} aria-haspopup="menu" aria-label="Menu">
+            <span className="avatar" aria-hidden="true">{initials}</span>
+            <span className="menu-name">{me.name}</span>
+            <span className="menu-dots" aria-hidden="true">⋯</span>
+            {waiting > 0 && <span className="menu-dot" aria-hidden="true" />}
           </button>
-        </span>
+          {menu && (
+            <>
+              <button className="menu-scrim" aria-label="Close the menu" onClick={() => setMenu(false)} />
+              <div className="menu-sheet" role="menu">
+                <div className="menu-who">
+                  <b>{me.name}</b>
+                  <span className="sub">{me.company_name}</span>
+                </div>
+                {views.length > 1 && (
+                  <div className="menu-tabs">
+                    {views.map(([key, label]) => (
+                      <button key={key} role="menuitem" aria-current={view === key ? "page" : undefined} onClick={() => open(key)}>
+                        <span>{label}</span>
+                        {counts(key)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="menu-foot">
+                  {canSettings && (
+                    <button role="menuitem" aria-current={view === "settings" ? "page" : undefined} onClick={() => open("settings")}>
+                      Settings and suggestions
+                    </button>
+                  )}
+                  <button role="menuitem" className="danger" onClick={handleSignOut}>Sign out</button>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       </header>
       <main className="content">
         {!canField && !canOffice && !canMaterials && !canSales ? (
@@ -317,7 +369,7 @@ export default function App() {
         ) : view === "library" && canLibrary ? (
           <LibraryView me={me} go={go} {...navProps("library")} />
         ) : view === "settings" && canSettings ? (
-          <SettingsView />
+          <SettingsView me={me} onMe={(m) => { setMe(m); safeSet(ME_KEY, m); }} tabs={views} />
         ) : view === "crews" && canCrews ? (
           <CrewsView />
         ) : view === "materials" && canMaterials ? (

@@ -3,6 +3,8 @@ company's default rates and markups for new estimates."""
 import json
 
 from fastapi import APIRouter, Depends, HTTPException
+from typing import Literal
+
 from pydantic import BaseModel, Field, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -11,8 +13,9 @@ from ..activity import changes, history, iso, log, log_system
 from ..auth import ESTIMATES, require_roles
 from ..db import get_db
 from ..library_starter import STARTER_TASKS, STARTER_UNITS
+from ..materials_starter import STARTER_PARTS
 from ..schemas import Unit
-from ..models import Company, Estimate, EstimateVersion, Job, JobTask, Role, Subcontractor, TaskKind, TaskTemplate, TaskType, User, utcnow
+from ..models import Company, Estimate, EstimateVersion, Job, JobTask, Role, StockItem, Subcontractor, TaskKind, TaskTemplate, TaskType, User, utcnow
 
 router = APIRouter(prefix="/api/library", tags=["library"])
 estimators = require_roles(*ESTIMATES)
@@ -20,6 +23,25 @@ gm_only = require_roles(Role.gm)
 
 
 # ---------- shapes ----------
+
+class PartIn(BaseModel):
+    """Something a library task brings onto an estimate: a material, machine
+    time, another cost or a fee. Its amount follows the task ("0.75 hr for
+    every 20 ton"), covers the court area (SF per coat), or is a set amount."""
+
+    category: Literal["material", "equipment", "other", "fee"] = "material"
+    description: str = Field(min_length=1, max_length=200)
+    item_id: str | None = None          # from the price list; its price is used when the cost is blank
+    unit: str = Field(default="", max_length=20)
+    unit_cost: float | None = Field(default=None, ge=0, le=10_000_000)
+    in_house: bool = False
+    how: Literal["task", "area", "fixed"] = "task"
+    per_amount: float | None = Field(default=None, ge=0, le=1_000_000)
+    per_every: float | None = Field(default=None, gt=0, le=1_000_000)
+    coverage: float | None = Field(default=None, ge=0, le=1_000_000)
+    coats: float | None = Field(default=None, ge=0, le=50)
+    quantity: float | None = Field(default=None, ge=0, le=1_000_000)
+
 
 class TaskTemplateIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
@@ -33,6 +55,8 @@ class TaskTemplateIn(BaseModel):
     unit_price: float | None = Field(default=None, ge=0, le=1_000_000)
     coats: float | None = Field(default=None, ge=0, le=50)
     notes: str = Field(default="", max_length=2000)
+    all_in: bool = False
+    parts: list[PartIn] = Field(default_factory=list, max_length=30)
 
     @model_validator(mode="after")
     def _unit_fields(self):
@@ -70,7 +94,8 @@ class DefaultsIn(BaseModel):
 DEFAULT_FIELDS = tuple(DefaultsIn.model_fields)
 TASK_LABELS = {"name": "Name", "aliases": "Other names", "task_type": "Type", "kind": "Crew or sub",
                "cost_rate": "Cost rate", "charge_rate": "Charge rate", "unit": "Measured in",
-               "production_rate": "Production rate", "unit_price": "Price per unit", "coats": "Coats", "notes": "Notes"}
+               "production_rate": "Production rate", "unit_price": "Price per unit", "coats": "Coats", "notes": "Notes",
+               "all_in": "Priced all in", "parts": "Parts"}
 SUB_LABELS = {"name": "Name", "trade": "Trade", "contact_name": "Contact", "phone": "Phone", "email": "Email",
               "notes": "Notes", "links": "Documents"}
 
@@ -89,7 +114,19 @@ def _alias_text(text: str) -> str:
 def task_out(t: TaskTemplate) -> dict:
     return {"id": t.id, "name": t.name, "aliases": [a for a in t.aliases.split("\n") if a], "task_type": t.task_type.value,
             "kind": t.kind.value, "cost_rate": t.cost_rate, "charge_rate": t.charge_rate, "unit": t.unit or "hr",
-            "production_rate": t.production_rate, "unit_price": t.unit_price, "coats": t.coats, "notes": t.notes, "active": t.active}
+            "production_rate": t.production_rate, "unit_price": t.unit_price, "coats": t.coats, "notes": t.notes, "active": t.active,
+            "all_in": bool(t.all_in), "parts": json.loads(t.parts or "[]")}
+
+
+def _parts_text(parts: list) -> str:
+    """For the history: "Base rock (1.05 ton per ton); Loader (0.75 hr per 20 ton)"."""
+    out = []
+    for p in parts:
+        if p.get("how") == "task" and p.get("per_amount"):
+            out.append(f"{p['description']} ({p['per_amount']:g} {p.get('unit', '')} per {p.get('per_every') or 1:g})")
+        else:
+            out.append(p["description"])
+    return "; ".join(out) or "none"
 
 
 def sub_out(s: Subcontractor) -> dict:
@@ -110,6 +147,8 @@ def _plain(v):
 def add_starter(db: Session, user: User) -> int:
     """Add the starter list. Names already in the library are skipped."""
     existing = list(db.scalars(select(TaskTemplate).where(TaskTemplate.company_id == user.company_id)))
+    # parts link to the price list by name, when the item is there
+    items = {i.name.lower(): i.id for i in db.scalars(select(StockItem).where(StockItem.company_id == user.company_id))}
     taken = {n.lower() for t in existing for n in [t.name, *t.aliases.split("\n")] if n}
     added = 0
     for name, aliases, ttype, kind in STARTER_TASKS:
@@ -117,8 +156,9 @@ def add_starter(db: Session, user: User) -> int:
         if name.lower() in taken:
             continue
         unit, coats = STARTER_UNITS.get(name, ("hr", None))
+        parts = [p | {"item_id": items.get(p["description"].lower())} for p in STARTER_PARTS.get(name, [])]
         db.add(TaskTemplate(company_id=user.company_id, created_by_id=user.id, name=name, aliases="\n".join(free),
-                            task_type=ttype, kind=kind, unit=unit, coats=coats))
+                            task_type=ttype, kind=kind, unit=unit, coats=coats, parts=json.dumps(parts)))
         taken |= {name.lower(), *(a.lower() for a in free)}
         added += 1
     return added
@@ -177,6 +217,7 @@ def _clash(db: Session, user: User, names: list[str], skip_id: str | None = None
 @router.post("/tasks", status_code=201)
 def add_task(body: TaskTemplateIn, user: User = Depends(gm_only), db: Session = Depends(get_db)):
     data = body.model_dump() | {"name": " ".join(body.name.split()), "aliases": _alias_text(body.aliases)}
+    data["parts"] = json.dumps(data["parts"])
     msg = _clash(db, user, [data["name"], *data["aliases"].split("\n")])
     if msg:
         raise HTTPException(409, msg)
@@ -195,8 +236,12 @@ def edit_task(task_id: str, body: TaskTemplateIn, user: User = Depends(gm_only),
     msg = _clash(db, user, [data["name"], *data["aliases"].split("\n")], skip_id=t.id)
     if msg:
         raise HTTPException(409, msg)
-    what = changes({k: str(_plain(getattr(t, k)) if getattr(t, k) is not None else "") for k in TASK_LABELS},
-                   {k: str(_plain(v)) if v is not None else "" for k, v in data.items()}, TASK_LABELS)
+    before = {k: str(_plain(getattr(t, k)) if getattr(t, k) is not None else "") for k in TASK_LABELS}
+    before["parts"] = _parts_text(json.loads(t.parts or "[]"))
+    after = {k: str(_plain(v)) if v is not None else "" for k, v in data.items()}
+    after["parts"] = _parts_text(data["parts"])
+    what = changes(before, after, TASK_LABELS)
+    data["parts"] = json.dumps(data["parts"])
     for k, v in data.items():
         setattr(t, k, v)
     t.updated_at = utcnow()
@@ -225,6 +270,22 @@ def task_active(task_id: str, body: ActiveIn, user: User = Depends(gm_only), db:
 def task_history(task_id: str, user: User = Depends(estimators), db: Session = Depends(get_db)):
     t = _load_task(db, user, task_id)
     return history(db, user.company_id, "task", t.id)
+
+
+@router.post("/tasks/starter-parts")
+def load_starter_parts(user: User = Depends(gm_only), db: Session = Depends(get_db)):
+    """Give starter tasks that have no parts yet the materials and machine
+    time they usually bring (ballpark amounts to check)."""
+    items = {i.name.lower(): i.id for i in db.scalars(select(StockItem).where(StockItem.company_id == user.company_id))}
+    filled = 0
+    for t in db.scalars(select(TaskTemplate).where(TaskTemplate.company_id == user.company_id)):
+        parts = STARTER_PARTS.get(t.name)
+        if parts and json.loads(t.parts or "[]") == []:
+            t.parts = json.dumps([p | {"item_id": items.get(p["description"].lower())} for p in parts])
+            log(db, user, "task", t.id, f"Added the starter parts to {t.name}", _parts_text(parts))
+            filled += 1
+    db.commit()
+    return {"filled": filled}
 
 
 @router.post("/tasks/starter")
