@@ -211,6 +211,16 @@ export default function App() {
       .catch(() => {});
   }, [me?.estimates, mode, nav.n]);
 
+  // Problems from the site (Jobs tab) and material asked for (Materials tab).
+  const [alerts, setAlerts] = useState({ problems: 0, material_requests: 0 });
+  useEffect(() => {
+    if (!me || DEMO || !["gm", "pm", "warehouse"].includes(me.role)) return;
+    const go = () => api("/api/alerts").then(setAlerts).catch(() => {});
+    go();
+    const t = setInterval(go, 60000);
+    return () => clearInterval(t);
+  }, [me, mode, nav.n]);
+
   useEffect(() => {
     if (!getToken() || invite) return;
     api("/api/me")
@@ -272,6 +282,16 @@ export default function App() {
                 {key === "office" && readyCount > 0 && (
                   <span className="tab-count" aria-label={`${readyCount} ready to be scheduled`}>
                     {readyCount}
+                  </span>
+                )}
+                {key === "office" && alerts.problems > 0 && (
+                  <span className="tab-count warn" aria-label={`${alerts.problems} problems reported from the site`} title="Problems reported from the site">
+                    {alerts.problems}
+                  </span>
+                )}
+                {key === "materials" && alerts.material_requests > 0 && (
+                  <span className="tab-count warn" aria-label={`${alerts.material_requests} material requests waiting`} title="Material asked for from the field">
+                    {alerts.material_requests}
                   </span>
                 )}
               </button>

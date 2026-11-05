@@ -15,6 +15,7 @@ from . import config
 from .auth import hash_password
 from .db import Base, SessionLocal, engine
 from .models import (
+    Crew, CrewMember, JobCrew,
     Company, CostCategory, CostLine, CourtType, Job, LocationPing, MoveKind, StockItem, StockMove, JobStatus, JobTask, Role, ScopeType, TaskType, TimeEntry, User, utcnow,
 )
 
@@ -170,6 +171,9 @@ def seed() -> None:
     lead1, lead2 = users["dev-lead-1"], users["dev-lead-2"]
     team_a = [lead1, crew[0], crew[1]]
     team_b = [lead2, crew[2], crew[3]]
+    # Each crew lead's usual crew (Team tab → Crews).
+    for lead, team in ((lead1, team_a), (lead2, team_b)):
+        db.add(Crew(company_id=co.id, lead_id=lead.id, members=[CrewMember(company_id=co.id, user_id=w.id) for w in team[1:]]))
 
     for i, (name, client, court, scope, status, contract, rate, lat, lng, tasks, factor) in enumerate(JOBS):
         job = Job(company_id=co.id, name=name, client=client, address="Sample address", lat=lat, lng=lng,
@@ -185,6 +189,13 @@ def seed() -> None:
         job.sales_tax_pct = 7.0 if i in SAMPLE_LINES else 0.0
 
         team, lead = (team_a, lead1) if i % 2 == 0 else (team_b, lead2)
+        # Sent out to that crew: the lead runs it, the rest are on the crew.
+        job.crew_lead_id = lead.id
+        job.crew.extend(JobCrew(company_id=co.id, user_id=w.id) for w in team if w is not lead)
+        job.start_date = today + timedelta(days=3) if status == JobStatus.scheduled else today - timedelta(days=4 if status == JobStatus.active else 30 - i * 12)
+        if status != JobStatus.scheduled:
+            job.started_at = utcnow() - timedelta(days=4 if status == JobStatus.active else 30 - i * 12)
+            job.site_walk_at = job.started_at + timedelta(minutes=40)
         if status == JobStatus.complete:
             start = today - timedelta(days=30 - i * 12)
             actual = [(t, t.estimated_hours * factor * rng.uniform(0.85, 1.15)) for t in job.tasks]
@@ -334,7 +345,7 @@ def _seed_library(db, co, users) -> None:
                     "Pressure wash": (38.0, 75.0), "Broom clean": (30.0, 55.0)}
     # Made-up production rates and prices per unit, to show how they work.
     sample_units = {"Pressure wash": (900.0, 0.07), "Crack fill": (40.0, 1.4), "Acrylic resurfacer": (500.0, 0.11),
-                    "Color coat": (600.0, 0.09), "Line painting": (6.0, 330.0), "Install nets and center straps": (1.0, 60.0),
+                    "Color coat": (600.0, 0.09), "Line painting": (120.0, 1.25), "Install nets and center straps": (1.0, 60.0),
                     "Install net posts": (2.5, 140.0), "Low-spot patch": (25.0, 2.2),
                     # per acre: hours an acre, price an acre (made up)
                     "Clearing and grubbing, grass": (6.0, 1500.0), "Clearing and grubbing, light brush": (12.0, 3500.0),

@@ -14,21 +14,23 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, undefer
 
 from ..activity import iso, log
-from ..auth import SALES_SIDE, require_roles
+from ..auth import EDITS_JOBS, SALES_SIDE, current_user
 from ..db import get_db
-from ..models import Photo, Role, User, utcnow
+from ..models import JobTask, Photo, Role, User, utcnow
 
 router = APIRouter(prefix="/api/photos", tags=["photos"])
-sales_side = require_roles(*SALES_SIDE)
+# Leads and estimates: the sales side. Jobs: the crew lead on it and the office.
+WHO = {"lead": SALES_SIDE, "estimate": SALES_SIDE, "job": EDITS_JOBS | {Role.crew_lead, Role.owner},
+       "task": EDITS_JOBS | {Role.crew_lead, Role.owner}}  # a task on a job: done or partly done
 
 MAX_PHOTO = 4 * 1024 * 1024   # after the phone shrinks it; well over what it sends
 MAX_THUMB = 400 * 1024
 MAX_PER_SUBJECT = 300
-KINDS = ("lead", "estimate")
+KINDS = ("lead", "estimate", "job", "task")
 
 
 class PhotoIn(BaseModel):
-    kind: str = Field(pattern="^(lead|estimate)$")
+    kind: str = Field(pattern="^(lead|estimate|job|task)$")
     subject_id: str = Field(min_length=1, max_length=36)
     name: str = Field(default="", max_length=200)
     caption: str = Field(default="", max_length=500)
@@ -64,14 +66,28 @@ def _decode(text: str, limit: int, what: str) -> tuple[bytes, str]:
 
 
 def check_subject(db: Session, user: User, kind: str, subject_id: str):
-    """The lead or estimate, if this person can see it (sales: their own)."""
+    """The lead, estimate or job, if this person can see it (sales: their
+    own leads; a crew lead: the jobs sent to them)."""
+    if user.role not in WHO.get(kind, ()):
+        raise HTTPException(403, "Your role can't do that")
+    if kind == "job":
+        from .jobs import load_job
+        return load_job(db, user, subject_id)
+    if kind == "task":
+        from ..models import JobTask
+        from .jobs import load_job
+        t = db.scalar(select(JobTask).where(JobTask.id == subject_id, JobTask.company_id == user.company_id))
+        if t is None:
+            raise HTTPException(404, "Task not found")
+        load_job(db, user, t.job_id)  # a crew lead: only their own jobs
+        return t
     if kind == "lead":
         from .leads import load_lead
         return load_lead(db, user, subject_id)
     if kind == "estimate":
         from .estimates import load_estimate
         return load_estimate(db, user, subject_id)
-    raise HTTPException(422, "Photos go on a lead or an estimate")
+    raise HTTPException(422, "Photos go on a lead, an estimate or a job")
 
 
 def photo_out(p: Photo, user: User, source: str | None = None) -> dict:
@@ -86,8 +102,8 @@ def _live(db: Session, company_id: str, kind: str, subject_id: str) -> list[Phot
 
 
 @router.get("")
-def list_photos(kind: str = Query(pattern="^(lead|estimate)$"), id: str = Query(max_length=36),
-                user: User = Depends(sales_side), db: Session = Depends(get_db)):
+def list_photos(kind: str = Query(pattern="^(lead|estimate|job|task)$"), id: str = Query(max_length=36),
+                user: User = Depends(current_user), db: Session = Depends(get_db)):
     subject = check_subject(db, user, kind, id)
     out = [photo_out(p, user) for p in _live(db, user.company_id, kind, id)]
     if kind == "estimate" and subject.lead_id:  # what sales took on site comes along
@@ -96,8 +112,8 @@ def list_photos(kind: str = Query(pattern="^(lead|estimate)$"), id: str = Query(
 
 
 @router.post("", status_code=201)
-def add_photo(body: PhotoIn, user: User = Depends(sales_side), db: Session = Depends(get_db)):
-    check_subject(db, user, body.kind, body.subject_id)
+def add_photo(body: PhotoIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    subject = check_subject(db, user, body.kind, body.subject_id)
     if len(_live(db, user.company_id, body.kind, body.subject_id)) >= MAX_PER_SUBJECT:
         raise HTTPException(409, f"This {body.kind} already has {MAX_PER_SUBJECT} photos.")
     data, kind = _decode(body.data, MAX_PHOTO, "photo")
@@ -106,7 +122,10 @@ def add_photo(body: PhotoIn, user: User = Depends(sales_side), db: Session = Dep
               caption=body.caption.strip(), content_type=kind, size=len(data), data=data, thumb=thumb, created_by_id=user.id)
     db.add(p)
     db.flush()
-    log(db, user, body.kind, body.subject_id, "Added a photo", p.name)
+    if body.kind == "task":  # in the job's history, saying which task
+        log(db, user, "job", subject.job_id, f"Added a photo to {subject.name}", p.name)
+    else:
+        log(db, user, body.kind, body.subject_id, "Added a photo", p.name)
     db.commit()
     return photo_out(p, user)
 
@@ -121,7 +140,7 @@ def _load(db: Session, user: User, photo_id: str) -> Photo:
 
 @router.get("/{photo_id}")
 def get_photo(photo_id: str, size: str = Query(default="full", pattern="^(full|thumb)$"),
-              user: User = Depends(sales_side), db: Session = Depends(get_db)):
+              user: User = Depends(current_user), db: Session = Depends(get_db)):
     p = _load(db, user, photo_id)
     if p.removed_at is not None:
         raise HTTPException(404, "That photo was removed")
@@ -132,13 +151,14 @@ def get_photo(photo_id: str, size: str = Query(default="full", pattern="^(full|t
 
 
 @router.post("/{photo_id}/remove")
-def remove_photo(photo_id: str, body: RemoveIn, user: User = Depends(sales_side), db: Session = Depends(get_db)):
+def remove_photo(photo_id: str, body: RemoveIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     """Taken off the lead, never deleted: the GM, or whoever added it."""
     p = _load(db, user, photo_id)
     if user.role != Role.gm and p.created_by_id != user.id:
         raise HTTPException(403, "Only the GM or whoever added a photo can remove it.")
     if p.removed_at is None:
         p.removed_at, p.removed_by_id, p.removed_reason = utcnow(), user.id, body.reason.strip()
-        log(db, user, p.kind, p.subject_id, "Removed a photo", f"{p.name}: {body.reason.strip()}" if p.name else body.reason.strip())
+        where = ("job", db.get(JobTask, p.subject_id).job_id) if p.kind == "task" else (p.kind, p.subject_id)
+        log(db, user, *where, "Removed a photo", f"{p.name}: {body.reason.strip()}" if p.name else body.reason.strip())
         db.commit()
     return {"ok": True}

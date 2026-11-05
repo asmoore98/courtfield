@@ -222,6 +222,14 @@ class Job(Base):
     sales_tax_pct: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
     # The client record, when the job came from an estimate or was linked to one.
     client_id: Mapped[str | None] = mapped_column(ForeignKey("clients.id"), nullable=True, index=True)
+    # Sent out to the field: who runs it, who's on the crew, when it starts.
+    crew_lead_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # The crew lead started it on site (clocked in), then walked the site.
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    site_walk_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # The scope of work from the estimate, for the crew to check the site against.
+    scope_text: Mapped[str] = mapped_column(Text, default="", server_default="")
 
     cost_lines: Mapped[list[CostLine]] = relationship(
         back_populates="job", order_by="CostLine.sort_order", cascade="all, delete-orphan"
@@ -229,6 +237,8 @@ class Job(Base):
     tasks: Mapped[list[JobTask]] = relationship(
         back_populates="job", order_by="JobTask.sort_order", cascade="all, delete-orphan"
     )
+    crew_lead: Mapped["User | None"] = relationship(foreign_keys=[crew_lead_id])
+    crew: Mapped[list["JobCrew"]] = relationship(cascade="all, delete-orphan")
 
 
 class JobTask(Base):
@@ -260,6 +270,12 @@ class JobTask(Base):
     # How many people work it; estimated_hours is everyone's hours together
     # (4 people for 8 hours = 32), so it compares with the time clocked.
     crew_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Where the crew lead says it stands: "" (not marked), "partial" or "done".
+    progress: Mapped[str] = mapped_column(String(10), default="", server_default="")
+    progress_pct: Mapped[int | None] = mapped_column(Integer, nullable=True)  # how far along, 0–100 (100 = done)
+    progress_note: Mapped[str] = mapped_column(Text, default="", server_default="")
+    progress_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    progress_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     job: Mapped[Job] = relationship(back_populates="tasks")
 
@@ -650,3 +666,115 @@ class Photo(Base):
     removed_reason: Mapped[str] = mapped_column(Text, default="")
 
     created_by: Mapped[User] = relationship(foreign_keys=[created_by_id])
+
+
+class JobCrew(Base):
+    """Who's on the crew for a job (besides the crew lead)."""
+
+    __tablename__ = "job_crew"
+    __table_args__ = (UniqueConstraint("job_id", "user_id", name="uq_job_crew"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+
+    user: Mapped[User] = relationship()
+
+
+class Crew(Base):
+    """A crew lead's usual crew. Picking the lead when a job is sent out
+    brings their crew along (it can still be changed for that job). One crew
+    per lead; a person is on one crew at a time."""
+
+    __tablename__ = "crews"
+    __table_args__ = (UniqueConstraint("company_id", "lead_id", name="uq_crew_lead"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    lead_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(String(100), default="")
+
+    lead: Mapped[User] = relationship()
+    members: Mapped[list[CrewMember]] = relationship(cascade="all, delete-orphan")
+
+
+class CrewMember(Base):
+    __tablename__ = "crew_members"
+    __table_args__ = (UniqueConstraint("company_id", "user_id", name="uq_crew_member"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    crew_id: Mapped[str] = mapped_column(ForeignKey("crews.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+
+    user: Mapped[User] = relationship()
+
+
+class JobReport(Base):
+    """Something the crew lead found on site: a problem (damage, something
+    different from the estimate, access) or a note. The office marks problems
+    handled, with what was done. Never deleted."""
+
+    __tablename__ = "job_reports"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(20), default="problem")  # problem | note
+    text: Mapped[str] = mapped_column(Text)
+    created_by_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    resolved_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    resolution: Mapped[str] = mapped_column(Text, default="")
+
+    created_by: Mapped[User] = relationship(foreign_keys=[created_by_id])
+    resolved_by: Mapped[User | None] = relationship(foreign_keys=[resolved_by_id])
+
+
+class MaterialRequest(Base):
+    """The crew lead asking for more material on a job. They sign for it by
+    name. The warehouse (or GM / PM) marks it sent or declines it. Never deleted."""
+
+    __tablename__ = "material_requests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
+    item_id: Mapped[str | None] = mapped_column(ForeignKey("stock_items.id", ondelete="SET NULL"), nullable=True)
+    description: Mapped[str] = mapped_column(String(200))
+    quantity: Mapped[float] = mapped_column(Float)
+    unit: Mapped[str] = mapped_column(String(20), default="")
+    reason: Mapped[str] = mapped_column(Text, default="")
+    requested_by_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    signed_name: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    status: Mapped[str] = mapped_column(String(10), default="open")  # open | sent | declined
+    handled_by_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    handled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    handled_note: Mapped[str] = mapped_column(Text, default="")
+
+    job: Mapped[Job] = relationship()
+    requested_by: Mapped[User] = relationship(foreign_keys=[requested_by_id])
+    handled_by: Mapped[User | None] = relationship(foreign_keys=[handled_by_id])
+
+
+class MaterialCheck(Base):
+    """Someone checked a job's material: the shop before the truck leaves
+    ("loaded"), or the crew lead on site ("on_site"), item by item. Kept as a
+    record; a shortage on site is also sent to the office as a problem."""
+
+    __tablename__ = "material_checks"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(10))  # loaded | on_site
+    all_here: Mapped[bool] = mapped_column(default=True)
+    items: Mapped[str] = mapped_column(Text, default="[]")  # JSON: [{description, unit, expected, here}]
+    note: Mapped[str] = mapped_column(Text, default="")
+    checked_by_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    checked_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    checked_by: Mapped[User] = relationship()

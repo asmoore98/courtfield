@@ -6,6 +6,62 @@ To undo a whole batch after it's merged: open its pull request on GitHub and cli
 
 ---
 
+## v0.6.0 — Batch 4: Jobs out to the field
+
+**Date:** November 5, 2026 · **Branch:** `drew/batch4-field` · **By:** Drew Moore
+
+From Andrew's run-through and Drew's field test: a won estimate becomes a job with a start date and a crew and goes to the crew lead's phone. On site the crew lead clocks the crew in first, walks the site against the estimate, then runs the work: tasks marked done or partly done with photos, more material asked for and signed for, problems sent to the office, and the crew's hours checked and fixed with a full record.
+
+### What changed
+
+| Change | Why | Where |
+|---|---|---|
+| **Crews:** on the Team tab the GM sets up each crew lead's usual crew (Set up a crew → lead, optional name, who's on it). Someone is on one crew at a time; adding them to a crew moves them off their old one. When a job is sent out, picking the crew lead fills in their crew, and it can still be changed for that one job (someone off, a helper) | "Pre-create the crews and you just select the lead and his guys move along with him" | `Crew`, `CrewMember` models, `routers/crews.py`, `CrewSetup.jsx`, `TeamView.jsx`, `CrewForm.jsx` |
+| **Schedule it:** on the Jobs tab, each won estimate has "Schedule it" (GM and PMs). Pick the start date, the crew lead and who's on the crew, and the job is made and sent out in one step. Estimators still make the job; the GM or a PM sends it out | Start dates and crews are set where the job is made | `CrewForm.jsx`, `OfficeView.jsx`, `routers/estimates.py` |
+| **Who's on what, right now:** the GM's job page has an **On the clock now** panel: each task with who's on it and since when (e.g. Fence: Marco, Tyler · Color coats: Luis). In-progress jobs in the Jobs list show the same in one line. It refreshes every 30 seconds | "I should be able to see what task the workers are doing at any time… who is doing what" | `job_costing` in `costing.py` (`on_clock`), `OnTheClock` in `OfficeView.jsx` |
+| **Crew and start date on the job page,** changeable by the GM and PMs. Every change is in the job's history | Crews and dates move | `routers/jobs.py` (`PUT /crew`), `OfficeView.jsx` |
+| **Jobs tab grouped:** In progress, Scheduled (by start date), Not sent to a crew yet, and Complete folded away at the bottom. Each job shows its crew lead, crew size, start date and any problems from the site | See what's running, what's next and what's waiting | `OfficeView.jsx` |
+| **Crew leads see only their own jobs,** server-side: other jobs don't list and don't open | "They should only see the job they're assigned to" | `load_job` and `list_jobs` in `routers/jobs.py` |
+| **Field tab is a list of jobs,** not a dropdown: the crew lead's jobs (in progress first, then by start date). Tap one to open it | Clearer than "pick from the dropdown" | `JobPicker` in `FieldView.jsx` |
+| **Clock in first:** "At the job?" with the job's crew already picked → **We're here: clock in**. That sets the site pin (if there isn't one), marks the job in progress and puts everyone on a "Site walk and setup" task, so nobody walks the site unpaid | "They will not be sitting there doing work for no reason if they're not getting paid" | `OnSite` in `FieldView.jsx`, `POST /api/jobs/{id}/start` |
+| **Walk the site** with what's on the estimate in front of you: the scope written for the customer, each task with its amount and planned labor hours, and the subs. Save notes or report problems as you go, with photos, then **Done walking: start the work**. Tasks show after the walk; "What's on the estimate" stays on the job screen after | "I don't see the estimate anywhere. Or a summary of what is supposed to be done" | `SiteWalk`, `EstimateSummary` in `FieldView.jsx`, `POST /walked`, `jobs.scope_text` |
+| **Notes and problems stay on the screen** after they're saved, with whether the office has handled each problem and what they said | "I typed in a note and saved it then it disappeared" | `ReportBox` in `FieldView.jsx`, `GET /api/jobs/{id}/reports` |
+| **How far along is each task:** the crew lead taps 25%, 50%, 75% or Done (or types a percent), adds a note and photos of the work. Hours come from the clock, so next to it the app says how the hours compare: "On pace", "Behind: 14 hrs used for 50% (about 10 planned)", or "Done in 22 of 20 hrs planned". The office sees the same on the job page under Hours by task, with the photos | "Just make it a percentage… we will know the hours based on how long it took them" | `TaskProgress` in `FieldView.jsx`, `Pace` in `HoursBar.jsx`, `POST /tasks/{id}/progress`, task photos in `routers/photos.py` |
+| **Material checked twice:** the shop checks the truck before it leaves (Materials tab → Job material lists → open the job → **Check the truck**), and the crew lead checks it again on site during the site walk (or any time from Materials on the job screen). Item by item: **Here** or **Short** and how many are there, with a reason for anything short. Anything short on site goes to the office as a problem. The shop's job list shows "Truck checked" / "Short on site" for each job, soonest start first | "There should be something for the crew lead to verify that all material is on site. It really should be verified before they even get there" | `MaterialCheck` model, `routers/requests.py`, `MaterialCheck.jsx`, `MaterialsView.jsx`, `FieldView.jsx`, `OfficeView.jsx` |
+| **Labor hours spelled out:** each task shows "3 people × 8 hrs = 24 labor hrs", and the Tasks list says hours are everyone's time added up. (Time was already counted per person; estimates already priced people × hours) | "If I have 3 guys working on 1 task for an hour that's actually 3 hours" | `FieldView.jsx`, `OfficeView.jsx` |
+| **Ask for more material,** signed: what, how many, why, the crew lead's full name and "I'm asking for this and I'm responsible for it". The crew lead sees each request's status | The crew lead personally signs off on what he asks for | `MaterialRequest` model, `routers/requests.py`, `MaterialAsk` in `FieldView.jsx` |
+| **Requests on the Materials tab** ("Asked for from the field") for the shop, GM and PMs: **Mark sent** or **Decline** with a reason. Also on the job page. Every step is in the job's history | Someone has to see it and act on it | `MaterialRequests.jsx`, `MaterialsView.jsx`, `OfficeView.jsx` |
+| **Red counts on the tabs:** open problems from the site on **Jobs** (GM, PMs) and waiting material requests on **Materials** (shop, GM, PMs). Email or text alerts come later | "A notification should probably be sent to the PM and or the GM" | `GET /api/alerts`, `App.jsx` |
+| **Crew leads check and fix their crew's hours** on the job screen (Crew hours → Check or fix hours): add missed time, fix a time or task, remove a mistake. Each change needs a reason and keeps what the entry was before and after. It's written on the job's history ("Changed Luis Vega's time: was…, now…, why…"), and the office's time log flags it **Changed by crew lead**. A crew lead can only change time on jobs they run, from the last 7 days, and not an entry the office already corrected. When adding or fixing, he picks from the job's crew; "Show everyone" brings up the rest for a helper that day | Crew leads log the hours, so they fix the mistakes; "very logged… so nothing fishy is going on" | `routers/time.py`, `TimeLog.jsx`, `CrewHours` in `FieldView.jsx` |
+| Fixed: fixing only the task on a time entry no longer also cuts the seconds off its times (which could make it look like it overlapped the entry before it) | Found while testing | `TimeLog.jsx` |
+| Crew leads only get time entries for their own jobs (they were getting the whole company's list from the server, though the app didn't show it) | Tightening | `list_time` in `routers/time.py` |
+| **This job's crew comes first** on the clock-in list; "Show everyone" brings up the rest of the team for a helper | Less scrolling past people on other jobs | `FieldView.jsx` |
+| **Problems from the site:** the crew lead reports a problem or a note (with photos) any time. The office sees a red count on the job in the list and on the job page, marks each one handled with what was done, and it's all in the job's history | Damage or extra work found on site gets to the office before the crew works around it | `JobReport` model, `routers/jobs.py`, `OfficeView.jsx`, `FieldView.jsx` |
+| **Photos on jobs** (site photos), for the crew lead and the office | Problems are easier to show than to describe | `routers/photos.py`, `Photos.jsx` |
+| The GM's "Start job" button is now "Mark in progress" and only shows for jobs with no crew lead (crew leads start their own jobs on site) | There were two different "start" buttons | `OfficeView.jsx` |
+| Jobs tab wording: "Work that never had an estimate, like a warranty callback or a quick patch, can be added here without one: Add a job with no estimate" | "For a callback…" didn't say what to do | `OfficeView.jsx` |
+| **Line painting by the linear foot** (and line layout and pickleball conversions) | That's how lines are measured and their paint taken off | `library_starter.py` |
+| Who sees what (checked, already in place): a crew lead signs in to the Field tab only, and never sees dollars. The warehouse (shop manager) signs in to the Materials tab only. GM sees everything | Andrew's notes 6 and 7 | `App.jsx`, `auth.py` |
+| **Where material is sent from:** Materials tab → Job material lists → pick the job → Send (unchanged; answering the question) | | `MaterialsView.jsx` |
+| Tests: 5 new (sending a job out and handling a problem; clock in, walk and task progress; asking for material and signing; checking material loaded and on site; a crew lead fixing time with the trail and limits; setting up crews); existing ones send their test job to the crew lead first. 110 pass | Keep it working | `tests/` |
+
+### Database change
+
+Migration `d3a8f5c1e9b2`: `crew_lead_id`, `start_date`, `started_at`, `site_walk_at` and `scope_text` on `jobs`; progress columns on `job_tasks` (a percent); new tables `crews`, `crew_members`, `job_crew`, `job_reports`, `material_requests` and `material_checks`. Existing jobs have no crew lead, so they show under **Not sent to a crew yet** and **crew leads won't see them until they're sent out**. Tested up, down and up on Postgres with data.
+
+### After it goes live
+
+1. GM: Jobs tab → open each open job → **Crew and start date → Send to a crew**. Until then crew leads' Field tabs are empty.
+2. GM: Library → Tasks → tap **Line painting** and set its price and rate per LF (it was per court).
+3. Make sure the crew leads and crew are on the **Team** tab with the right roles, then set up each crew under **Team → Crews**.
+
+### How to undo
+
+- **Everything:** revert this pull request on GitHub. To remove the columns and tables, run `alembic downgrade c7e19a4d2b55` from the Render Shell (deletes crew assignments, site reports, task progress, material requests and material checks).
+- **Crew leads fixing time only:** set `CORRECTS_TIME = (Role.gm,)` in `routers/time.py`.
+
+---
+
 ## v0.5.1 — Batch 3.1: Lead fixes, checklist by court type, photos, hand-off to estimating
 
 **Date:** November 3, 2026 · **Branch:** `drew/batch3.1-lead-fixes` · **By:** Drew Moore

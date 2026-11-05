@@ -42,3 +42,22 @@ export function HoursText({ estimated, actual, open = 0 }) {
     </span>
   );
 }
+
+// How a task's hours compare with how far along it is: 50% done should
+// have used about half the planned hours. Hours come from the clock.
+export function paceOf(pct, estimated, used) {
+  if (!pct || !estimated) return null;
+  const expected = (estimated * pct) / 100;
+  const r = (n) => Math.round(n * 10) / 10;
+  if (!used) return { tone: "none", text: "No hours clocked on this task yet" };
+  if (pct === 100 && used > estimated * 1.05) return { tone: "behind", text: `Done in ${r(used)} hrs, ${r(used - estimated)} over the ${r(estimated)} planned` };
+  if (pct === 100) return { tone: "on", text: `Done in ${r(used)} of ${r(estimated)} hrs planned` };
+  if (used > expected * 1.15) return { tone: "behind", text: `Behind: ${r(used)} hrs used for ${pct}% (about ${r(expected)} planned)` };
+  if (used < expected * 0.85) return { tone: "ahead", text: `Ahead: ${r(used)} hrs used for ${pct}% (about ${r(expected)} planned)` };
+  return { tone: "on", text: `On pace: ${r(used)} hrs used for ${pct}%` };
+}
+
+export function Pace({ pct, estimated, used }) {
+  const p = paceOf(pct, estimated, used);
+  return p ? <span className={`pace pace-${p.tone}`}>{p.text}</span> : null;
+}

@@ -18,7 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from ..activity import history, iso, log, log_system
-from ..auth import ESTIMATES, SALES_SIDE, require_roles
+from ..auth import ASSIGNS_CREWS, ESTIMATES, SALES_SIDE, require_roles
 from ..db import get_db
 from ..quantities import labor_charge
 from ..models import (
@@ -27,7 +27,7 @@ from ..models import (
 from ..sales_schemas import EstimateData, EstimateIn, EstimateStatusIn, NoteIn, VoidIn
 from ..schemas import JobIn
 from .clients import load_client
-from .jobs import build_job, check_task_refs
+from .jobs import CrewIn, assign_crew, build_job, check_task_refs
 
 router = APIRouter(prefix="/api/estimates", tags=["estimates"])
 sales_side = require_roles(*SALES_SIDE)
@@ -399,26 +399,33 @@ def remove_version(estimate_id: str, number: int, body: VoidIn, user: User = Dep
 
 
 @router.post("/{estimate_id}/create-job", status_code=201)
-def create_job(estimate_id: str, user: User = Depends(estimators), db: Session = Depends(get_db)):
-    """Turn a won estimate into a job: site, tasks, hours and costs carry over."""
+def create_job(estimate_id: str, body: CrewIn | None = None, user: User = Depends(estimators), db: Session = Depends(get_db)):
+    """Turn a won estimate into a job: site, tasks, hours and costs carry over.
+    The GM or a PM can send it out at the same time: crew lead, crew, start date."""
     e = load_estimate(db, user, estimate_id)
+    sending = body is not None and (body.crew_lead_id or body.crew_ids or body.start_date)
+    if sending and user.role not in ASSIGNS_CREWS:
+        raise HTTPException(403, "Only the GM or a PM sends jobs out to a crew.")
     if e.status != EstimateStatus.won:
         raise HTTPException(409, "Mark the estimate won first.")
     if e.job_id:
         raise HTTPException(409, "A job was already made from this estimate.")
     v = current(e)
     d = EstimateData.model_validate_json(v.data)
-    body = JobIn(name=e.name, client=e.client.name, address=d.site_address, parcel_id=d.parcel_id, lat=d.lat, lng=d.lng,
+    job_body = JobIn(name=e.name, client=e.client.name, address=d.site_address, parcel_id=d.parcel_id, lat=d.lat, lng=d.lng,
                  **{f"site_{k}": getattr(d, f"site_{k}") for k in ("street", "city", "state", "zip")},
                  court_type=d.court_type, scope_type=d.scope_type, contract_amount=d.price,
                  estimated_labor_rate=d.estimated_labor_rate, sales_tax_pct=d.sales_tax_pct,
                  tasks=[t.model_copy(update={"id": None, "template_id": t.template_id}) for t in d.tasks],
                  cost_lines=[c.model_copy(update={"id": None}) for c in d.cost_lines])
-    job = build_job(db, user, body, client_id=e.client_id)
+    job = build_job(db, user, job_body, client_id=e.client_id)
+    job.scope_text = d.scope_text  # the crew checks the site against it
     e.job_id = job.id
     e.updated_at = utcnow()
     log(db, user, "estimate", e.id, f"Made job from v{v.version}")
     log(db, user, "job", job.id, f"Made from estimate {e.number} v{v.version}")
+    if sending:
+        assign_crew(db, user, job, body)
     db.commit()
     return {"job_id": job.id}
 

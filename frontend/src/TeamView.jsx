@@ -1,5 +1,6 @@
 // The GM's people screen: who's on the team, what they do, what their hour
 // costs, and who can sign in. Sign-in links are shared by text or email.
+import CrewSetup from "./CrewSetup";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 
@@ -219,6 +220,8 @@ export default function TeamView({ me }) {
         </ul>
       </section>
       <p className="help">Turning someone off ends their sign-ins and takes them off the crew list. Their past hours stay on every job.</p>
+
+      <CrewSetup key={people.map((p) => `${p.id}${p.role}${p.active}`).join()} people={people} />
     </div>
   );
 }

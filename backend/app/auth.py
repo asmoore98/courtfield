@@ -33,6 +33,8 @@ ENTERS_TIME = {Role.gm, Role.crew_lead}
 # estimate is GM only (CREATES_JOBS); otherwise jobs come from won estimates.
 EDITS_JOBS = {Role.gm, Role.estimator, Role.pm}
 CREATES_JOBS = {Role.gm}
+# Who sends a job out to a crew: crew lead, crew and start date.
+ASSIGNS_CREWS = {Role.gm, Role.pm}
 # Who logs material in and out of the warehouse.
 MANAGES_STOCK = {Role.gm, Role.warehouse}
 # Who keeps the price list.

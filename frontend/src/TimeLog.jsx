@@ -1,5 +1,7 @@
-// A job's time log, plus the GM's tools to add, fix and remove time.
-// Every change needs a reason and is kept in the entry's history.
+// A job's time log, plus the tools to add, fix and remove time: the GM on
+// any job, a crew lead on their own crew's recent time (the server decides
+// which entries; see can_fix). Every change needs a reason and is kept in the
+// entry's history, and the office sees which ones a crew lead changed.
 import { Fragment, useEffect, useState } from "react";
 import { api } from "./api";
 
@@ -9,7 +11,7 @@ const toTime = (iso) => { const d = new Date(iso); return `${pad(d.getHours())}:
 const toIso = (date, time) => new Date(`${date}T${time}`).toISOString();
 const dayLabel = (iso) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 const timeLabel = (iso) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
-const ACTION_WORD = { add: "Added from the office", edit: "Corrected", remove: "Removed" };
+const ACTION_WORD = { add: "Added by hand", edit: "Corrected", remove: "Removed" };
 
 function describe(snap) {
   if (!snap) return "";
@@ -17,8 +19,11 @@ function describe(snap) {
   return `${snap.worker} · ${snap.task} · ${dayLabel(snap.clock_in)} ${timeLabel(snap.clock_in)} to ${out}`;
 }
 
-function TimeForm({ entry, jobId, tasks, crew, onSaved, onCancel }) {
+function TimeForm({ entry, jobId, tasks, crew: everyone, crewIds, onSaved, onCancel }) {
   const editing = !!entry;
+  // A crew lead picks from this job's crew; anyone else (a helper that day) is a tap away.
+  const [showAll, setShowAll] = useState(false);
+  const crew = crewIds && !showAll ? everyone.filter((c) => crewIds.has(c.id) || c.id === entry?.worker_id) : everyone;
   const today = toDate(new Date().toISOString());
   const [f, setF] = useState(() =>
     editing
@@ -49,9 +54,11 @@ function TimeForm({ entry, jobId, tasks, crew, onSaved, onCancel }) {
         const body = { reason: f.reason };
         if (f.worker_id !== entry.worker_id) body.worker_id = f.worker_id;
         if (f.task_id !== entry.task_id) body.task_id = f.task_id;
-        if (clock_in !== new Date(entry.clock_in).toISOString()) body.clock_in = clock_in;
-        const was = entry.clock_out ? new Date(entry.clock_out).toISOString() : null;
-        if (clock_out !== was) body.clock_out = clock_out;
+        // The form shows minutes, so only send a time that was actually changed
+        // (otherwise the seconds get cut off and look like a change).
+        if (f.date !== toDate(entry.clock_in) || f.start !== toTime(entry.clock_in)) body.clock_in = clock_in;
+        const wasEnd = entry.clock_out ? `${toDate(entry.clock_out)} ${toTime(entry.clock_out)}` : "";
+        if ((f.end ? `${f.endDate} ${f.end}` : "") !== wasEnd) body.clock_out = clock_out;
         if (Object.keys(body).length === 1) {
           setSaving(false);
           return setError("Nothing changed yet.");
@@ -82,6 +89,11 @@ function TimeForm({ entry, jobId, tasks, crew, onSaved, onCancel }) {
               <option key={c.id} value={c.id}>{c.name}</option>
             ))}
           </select>
+          {crewIds && (
+            <button type="button" className="link tf-all" onClick={() => setShowAll((v) => !v)}>
+              {showAll ? "Just this job's crew" : "Someone else helping? Show everyone"}
+            </button>
+          )}
         </label>
         <label htmlFor={id("task")}>
           Task
@@ -166,12 +178,13 @@ function History({ entry }) {
     api(`/api/time/${entry.id}/history`).then(setRows).catch(() => setRows([]));
   }, [entry.id]);
   if (!rows) return <p className="help">Loading history…</p>;
-  if (!rows.length) return <p className="help">No office changes. Entered from the field.</p>;
+  if (!rows.length) return <p className="help">No changes. Entered from the field.</p>;
   return (
     <ol className="history">
       {rows.map((h, i) => (
         <li key={i}>
-          <b>{ACTION_WORD[h.action]}</b> by {h.changed_by}, {dayLabel(h.changed_at)} {timeLabel(h.changed_at)}
+          <b>{ACTION_WORD[h.action]}</b> by {h.changed_by}
+          {h.by_crew_lead && " (crew lead)"}, {dayLabel(h.changed_at)} {timeLabel(h.changed_at)}
           <span className="h-reason">“{h.reason}”</span>
           {h.before && <span className="h-line">Was: {describe(h.before)}</span>}
           {h.after && h.action !== "add" && <span className="h-line">Now: {describe(h.after)}</span>}
@@ -182,14 +195,15 @@ function History({ entry }) {
   );
 }
 
-export default function TimeLog({ me, jobId, tasks, onChanged }) {
+export default function TimeLog({ me, jobId, tasks, onChanged, bare = false, crewIds = null }) {
   const [version, setVersion] = useState(0);
   const [showRemoved, setShowRemoved] = useState(false);
   const [entries, setEntries] = useState(null);
   const [crew, setCrew] = useState([]);
   const [open, setOpen] = useState(null); // { kind: "add" | "fix" | "remove" | "history", id? }
-  const canFix = me.role === "gm";
-  const seesHistory = me.sees_dollars;
+  const lead = me.role === "crew_lead";
+  const canFix = me.role === "gm" || lead;
+  const seesHistory = me.sees_dollars || lead;
 
   useEffect(() => {
     let live = true;
@@ -213,10 +227,11 @@ export default function TimeLog({ me, jobId, tasks, onChanged }) {
   const toggle = (kind, id) => setOpen((o) => (o?.kind === kind && o?.id === id ? null : { kind, id }));
   const cols = 4 + (canFix || seesHistory ? 1 : 0);
 
+  const Wrap = bare ? "div" : "section";
   return (
-    <section className="panel">
+    <Wrap className={bare ? "time-log" : "panel"}>
       <div className="panel-head">
-        <h3>Time log</h3>
+        <h3>{lead ? "Your crew's time on this job" : "Time log"}</h3>
         <div className="log-tools">
           {seesHistory && (
             <label className="check">
@@ -229,12 +244,55 @@ export default function TimeLog({ me, jobId, tasks, onChanged }) {
           )}
         </div>
       </div>
-      {open?.kind === "add" && <TimeForm jobId={jobId} tasks={tasks} crew={crew} onSaved={changed} onCancel={() => setOpen(null)} />}
+      {open?.kind === "add" && <TimeForm jobId={jobId} tasks={tasks} crew={crew} crewIds={crewIds} onSaved={changed} onCancel={() => setOpen(null)} />}
 
       {!entries ? (
         <p className="empty">Loading time…</p>
       ) : !entries.length ? (
-        <p className="empty">No time logged on this job yet.{canFix ? " Use Add time if hours were missed in the field." : ""}</p>
+        <p className="empty">No time logged on this job yet.{canFix ? " Use Add time if hours were missed." : ""}</p>
+      ) : bare ? (
+        // On a phone: one card per entry instead of a table.
+        <ul className="time-cards">
+          {entries.slice(0, 80).map((e) => (
+            <li key={e.id} className={e.removed ? "is-removed" : ""}>
+              <div className="tc-line">
+                <b>{e.worker_name}</b>
+                <span className="tc-hours">{e.hours == null ? <span className="t-near">On the clock</span> : `${e.hours.toFixed(1)} hrs`}</span>
+              </div>
+              <div className="tc-line sub">
+                <span>
+                  {e.task_name} · {dayLabel(e.clock_in)} {timeLabel(e.clock_in)}
+                  {e.clock_out ? ` to ${timeLabel(e.clock_out)}` : ""}
+                </span>
+              </div>
+              {(e.removed || e.edited || e.off_site) && (
+                <div className="tc-flags">
+                  {e.off_site && <span className="flag">Off site</span>}
+                  {e.removed ? <span className="flag flag-removed">Removed</span> : e.edited && <span className="flag flag-edited">Corrected</span>}
+                </div>
+              )}
+              <div className="tc-actions">
+                {canFix && e.can_fix && !e.removed && (
+                  <>
+                    <button className="link" onClick={() => toggle("fix", e.id)}>Fix</button>
+                    <button className="link" onClick={() => toggle("remove", e.id)}>Remove</button>
+                  </>
+                )}
+                {(e.edited || e.removed || e.changed_by_lead) && (
+                  <button className="link" onClick={() => toggle("history", e.id)}>History</button>
+                )}
+                {!e.can_fix && !e.removed && <span className="sub">Only the office can change this one</span>}
+              </div>
+              {open?.id === e.id && (
+                <div className="tc-open">
+                  {open.kind === "fix" && <TimeForm entry={e} jobId={jobId} tasks={tasks} crew={crew} crewIds={crewIds} onSaved={changed} onCancel={() => setOpen(null)} />}
+                  {open.kind === "remove" && <RemoveForm entry={e} onDone={changed} onCancel={() => setOpen(null)} />}
+                  {open.kind === "history" && <History entry={e} />}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
       ) : (
         <div className="table-scroll">
           <table className="log">
@@ -263,17 +321,18 @@ export default function TimeLog({ me, jobId, tasks, onChanged }) {
                       ) : (
                         e.edited && <span className="flag flag-edited">Corrected</span>
                       )}
+                      {e.changed_by_lead && !lead && <span className="flag flag-lead" title="A crew lead added, fixed or removed this">Changed by crew lead</span>}
                     </td>
                     <td className="num">{e.hours == null ? <span className="t-near">On the clock</span> : e.hours.toFixed(1)}</td>
                     {cols === 5 && (
                       <td className="row-actions">
-                        {canFix && !e.removed && (
+                        {canFix && e.can_fix && !e.removed && (
                           <>
                             <button className="link" onClick={() => toggle("fix", e.id)}>Fix</button>
                             <button className="link" onClick={() => toggle("remove", e.id)}>Remove</button>
                           </>
                         )}
-                        {seesHistory && (e.edited || e.removed) && (
+                        {seesHistory && (e.edited || e.removed || e.changed_by_lead) && (
                           <button className="link" onClick={() => toggle("history", e.id)}>History</button>
                         )}
                       </td>
@@ -282,7 +341,7 @@ export default function TimeLog({ me, jobId, tasks, onChanged }) {
                   {open?.id === e.id && (
                     <tr className="row-open">
                       <td colSpan={cols}>
-                        {open.kind === "fix" && <TimeForm entry={e} jobId={jobId} tasks={tasks} crew={crew} onSaved={changed} onCancel={() => setOpen(null)} />}
+                        {open.kind === "fix" && <TimeForm entry={e} jobId={jobId} tasks={tasks} crew={crew} crewIds={crewIds} onSaved={changed} onCancel={() => setOpen(null)} />}
                         {open.kind === "remove" && <RemoveForm entry={e} onDone={changed} onCancel={() => setOpen(null)} />}
                         {open.kind === "history" && <History entry={e} />}
                       </td>
@@ -294,6 +353,6 @@ export default function TimeLog({ me, jobId, tasks, onChanged }) {
           </table>
         </div>
       )}
-    </section>
+    </Wrap>
   );
 }

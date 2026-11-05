@@ -128,7 +128,8 @@ STARTER_UNITS: dict[str, tuple[str, float | None]] = {
     "Crack fill": ("lf", None), "Crack repair membrane system": ("lf", None), "Low-spot patch": ("sf", None),
     "Concrete spall repair": ("sf", None),
     "Acrylic resurfacer": ("sf_coat", 2), "Cushion coat system": ("sf_coat", 2), "Color coat": ("sf_coat", 2),
-    "Line layout": ("ea", None), "Line painting": ("ea", None), "Pickleball line conversion": ("ea", None),
+    # Lines are painted (and their paint taken off) by the linear foot.
+    "Line layout": ("lf", None), "Line painting": ("lf", None), "Pickleball line conversion": ("lf", None),
     "Core drill post sleeves": ("ea", None), "Net post removal": ("ea", None), "Basketball goal removal": ("ea", None),
     "Windscreen removal": ("lf", None), "Fence removal": ("lf", None), "Install net posts": ("ea", None), "Install nets and center straps": ("ea", None),
     "Basketball goal install": ("ea", None), "Windscreen install": ("lf", None), "Site amenities install": ("ls", None),
