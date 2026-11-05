@@ -7,10 +7,14 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_valid
 
 from .models import CostCategory, CourtType, JobStatus, Role, ScopeType, TaskKind, TaskType
 from .addresses import fill
-from .quantities import worked_hours
+from .quantities import size_quantity, worked_hours
 
 Unit = Literal["hr", "sf", "sf_coat", "lf", "sy", "cy", "ton", "acre", "ea", "ls"]
-Follows = Literal["", "surface", "paint", "courts"]
+# Where a quantity comes from on an estimate: the court size (surface, the
+# playing area inside the border, the border band, paintable area, courts),
+# the task's own length x width x depth ("size"), or, for a line on a task,
+# the task's amount ("task").
+Follows = Literal["", "surface", "playing", "border", "paint", "courts", "size", "task"]
 
 
 def to_naive_utc(value: datetime | None) -> datetime | None:
@@ -45,6 +49,9 @@ class MeOut(UserOut):
     edits_prices: bool = False
     sees_locations: bool = False
     drive_url: str = ""  # the company's Google Drive folder, for the "Open Drive" button
+    email: str | None = None
+    phone: str = ""
+    prefs: dict = {}  # theme, text size, start tab (Settings)
     location_notice_at: datetime | None = None
 
     @field_serializer("location_notice_at")
@@ -78,11 +85,22 @@ class TaskIn(BaseModel):
     follows: Follows = ""  # estimates only: quantity comes from the court size
     checklist_note: str = Field(default="", max_length=2000)  # estimates only: what sales said about this work
     crew_size: int | None = Field(default=None, ge=1, le=100)  # people on it; estimated_hours is all of them together
+    # Estimates only: priced by the unit, all in (quantities.py). Its lines are our cost inside the price.
+    all_in: bool = False
+    # Estimates only: work the quantity out from the size (follows = "size").
+    size_length_ft: float | None = Field(default=None, ge=0, le=100_000)
+    size_width_ft: float | None = Field(default=None, ge=0, le=100_000)
+    size_depth_in: float | None = Field(default=None, ge=0, le=1_000)
+    tons_per_cy: float | None = Field(default=None, ge=0, le=10)
 
     @model_validator(mode="after")
     def _hours(self):
         if self.kind == TaskKind.sub:
             return self
+        if self.follows == "size":
+            q = size_quantity(self.unit, self.size_length_ft, self.size_width_ft, self.size_depth_in, self.tons_per_cy)
+            if q is not None:
+                self.quantity = q
         h = worked_hours(self.unit, self.quantity, self.coats, self.production_rate)
         if h is not None:
             self.estimated_hours = h
@@ -129,6 +147,9 @@ class CostLineIn(BaseModel):
     follows: Follows = ""
     coats: float | None = Field(default=None, ge=0, le=50)
     coverage: float | None = Field(default=None, ge=0, le=1_000_000)  # SF one unit covers, per coat
+    # Estimates only, follows = "task": this much for every so many units of its task.
+    per_amount: float | None = Field(default=None, ge=0, le=1_000_000)
+    per_every: float | None = Field(default=None, gt=0, le=1_000_000)
 
 
 class CostLineOut(ORM):

@@ -20,24 +20,26 @@ export function useChecklists() {
   return lists;
 }
 
-export const blankCourt = () => ({ courts: "", length_ft: "", width_ft: "", surface_sf: "", paint_sf: "" });
+export const blankCourt = () => ({ courts: "", length_ft: "", width_ft: "", border_ft: "", surface_sf: "", paint_sf: "" });
 export const courtForm = (c) => Object.fromEntries(Object.keys(blankCourt()).map((k) => [k, c?.[k] == null ? "" : String(c[k])]));
 const optNum = (v) => (v === "" || v == null ? null : Number(v));
 export const courtBody = (c) => ({
   courts: c?.courts === "" || c?.courts == null ? null : Math.round(Number(c.courts)),
   length_ft: optNum(c?.length_ft),
   width_ft: optNum(c?.width_ft),
+  border_ft: optNum(c?.border_ft),
   surface_sf: optNum(c?.surface_sf),
   paint_sf: optNum(c?.paint_sf),
 });
 
-// Common surfaced sizes, as a starting point. Measure when it matters.
+// Common sizes, as a starting point: [width, length, border, what]. Measure when it matters.
+// With an uneven border (more at the ends than the sides), type the surfaced size with no border.
 const TYPICAL = {
-  tennis: [[60, 120, "tennis"]],
-  pickleball: [[30, 60, "pickleball"]],
+  tennis: [[60, 120, 0, "tennis, surfaced"]],
+  pickleball: [[30, 60, 0, "pickleball, surfaced"]],
   basketball: [
-    [50, 94, "full court"],
-    [50, 84, "high school"],
+    [50, 94, 5, "full court + 5 ft border"],
+    [50, 84, 5, "high school + 5 ft border"],
   ],
 };
 
@@ -63,14 +65,25 @@ export function CourtSizeFields({ court, courtType, onChange, paint = false }) {
           Width of one <span className="optional">(ft)</span>
           <NumInput decimals={1} value={c.width_ft} onChange={(v) => set("width_ft", v)} placeholder="ft" />
         </label>
+        <label>
+          Border all around <span className="optional">(ft)</span>
+          <NumInput decimals={1} value={c.border_ft ?? ""} onChange={(v) => set("border_ft", v)} placeholder="none" />
+        </label>
       </div>
+      {a.border != null && (
+        <p className="help court-split">
+          Playing area {fmt(a.playing, 0)} SF ({fmt(c.width_ft, 1)} × {fmt(c.length_ft, 1)}) + border {fmt(a.border, 0)} SF ={" "}
+          {fmt(a.surface, 0)} SF surfaced ({fmt(Number(c.width_ft) + 2 * Number(c.border_ft), 1)} × {fmt(Number(c.length_ft) + 2 * Number(c.border_ft), 1)}
+          {Number(c.courts) > 1 ? ` each, × ${c.courts}` : ""}). Lines go on the playing area; the border can be its own color.
+        </p>
+      )}
       {(TYPICAL[courtType] ?? []).length > 0 && (
         <p className="help typical">
           Common size:{" "}
-          {TYPICAL[courtType].map(([w, l, what], i) => (
+          {TYPICAL[courtType].map(([w, l, b, what], i) => (
             <span key={what}>
               {i > 0 && " · "}
-              <button type="button" className="link" onClick={() => onChange({ ...c, length_ft: String(l), width_ft: String(w) })}>
+              <button type="button" className="link" onClick={() => onChange({ ...c, length_ft: String(l), width_ft: String(w), border_ft: b ? String(b) : "" })}>
                 {w} × {l} ft ({what})
               </button>
             </span>
@@ -89,7 +102,7 @@ export function CourtSizeFields({ court, courtType, onChange, paint = false }) {
                 ? `Typed in. Courts × size would be ${fmt(a.auto, 0)} SF.`
                 : "Typed in."
               : a.auto != null
-                ? "Worked out from the courts and size. Type a number to use a measured total instead."
+                ? `Worked out from the courts and size${a.border != null ? " with the border" : ""}. Type a number to use a measured total instead.`
                 : "Fill in the size above, or type a measured total for odd shapes."}
           </span>
         </label>

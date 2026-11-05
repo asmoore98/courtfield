@@ -2,6 +2,9 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import "./styles.css";
+import { applyPrefs, savedPrefs } from "./prefs";
+
+applyPrefs(savedPrefs()); // the right screen color before anything loads
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>

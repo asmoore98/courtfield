@@ -48,7 +48,119 @@ export default function LibraryView({ me, go, initial }) {
 
 const blankTask = () => ({
   name: "", aliases: "", task_type: "other", kind: "crew", cost_rate: "", charge_rate: "", unit: "hr", production_rate: "", unit_price: "", coats: "", notes: "",
+  all_in: false, parts: [],
 });
+
+const PART_KINDS = [["material", "Material"], ["equipment", "Machine / rental"], ["other", "Other cost"], ["fee", "Permit / fee"]];
+const blankPart = () => ({ category: "material", description: "", item_id: null, unit: "", unit_cost: "", how: "task", per_amount: "", per_every: "1", quantity: "", coverage: "", coats: "" });
+const partForm = (p) => Object.fromEntries(Object.entries({ ...blankPart(), ...p }).map(([k, v]) => [k, v == null ? (k === "item_id" ? null : "") : typeof v === "number" ? String(v) : v]));
+const partBody = (p) => ({
+  category: p.category, description: p.description.trim(), item_id: p.item_id || null, unit: (p.unit ?? "").trim(),
+  unit_cost: optNum(p.unit_cost), how: p.how, in_house: false,
+  per_amount: p.how === "task" ? optNum(p.per_amount) : null, per_every: p.how === "task" ? optNum(p.per_every) || 1 : null,
+  quantity: p.how === "fixed" ? optNum(p.quantity) : null,
+  coverage: p.how === "area" ? optNum(p.coverage) : null, coats: p.how === "area" ? optNum(p.coats) : null,
+});
+
+/* What a task brings onto an estimate when it's picked: its materials,
+   machine time and fees. Each amount follows the task ("1 pail for every
+   600 SF a coat", "1 load for every 20 ton"), covers the court area, or is a
+   set amount. A blank cost uses the price list. */
+function PartsEditor({ parts, unit, items, onChange }) {
+  const set = (i, k, v) => onChange(parts.map((p, n) => (n === i ? { ...p, [k]: v } : p)));
+  const byName = Object.fromEntries(items.map((it) => [it.name.toLowerCase(), it]));
+  const taskUnit = unit && unit !== "hr" ? UNIT_SHORT[unit] + (unit === "sf_coat" ? " a coat" : "") : "labor hr";
+  return (
+    <fieldset className="span-2 measure parts">
+      <legend>What it brings onto an estimate</legend>
+      <p className="help">
+        Materials, machine time and fees that come with this task. Amounts work themselves out from the task's quantity, e.g. 1 pail for every 600 SF a coat, or
+        0.75 hr of loader for every 20 ton (whole loads). Leave the cost blank to use the price list. They can all be changed on each estimate.
+      </p>
+      <datalist id="part-items">
+        {items.map((it) => (
+          <option key={it.id} value={it.name} />
+        ))}
+      </datalist>
+      {parts.length > 0 && (
+        <ol className="part-list">
+          {parts.map((p, i) => {
+            const item = p.item_id ? items.find((it) => it.id === p.item_id) : null;
+            return (
+              <li key={i}>
+                <div className="part-top">
+                  <select value={p.category} onChange={(e) => set(i, "category", e.target.value)} aria-label={`Part ${i + 1}: kind`}>
+                    {PART_KINDS.map(([v, l]) => (
+                      <option key={v} value={v}>{l}</option>
+                    ))}
+                  </select>
+                  <input
+                    list="part-items"
+                    value={p.description}
+                    placeholder="From the price list, or type it"
+                    aria-label={`Part ${i + 1}: what`}
+                    onChange={(e) => {
+                      const hit = byName[e.target.value.trim().toLowerCase()];
+                      onChange(parts.map((x, n) => (n === i ? { ...x, description: e.target.value, item_id: hit?.id ?? null, unit: hit ? hit.unit : x.unit, category: hit ? hit.category : x.category } : x)));
+                    }}
+                  />
+                  <button type="button" className="icon remove" onClick={() => onChange(parts.filter((_, n) => n !== i))} aria-label={`Remove part ${i + 1}`}>✕</button>
+                </div>
+                <div className="part-grid">
+                  <label>
+                    Unit
+                    <input value={p.unit} onChange={(e) => set(i, "unit", e.target.value)} placeholder="pail, ton, hr…" maxLength={20} />
+                  </label>
+                  <label>
+                    Cost per unit
+                    <span className="affix">
+                      <span aria-hidden="true">$</span>
+                      <NumInput value={p.unit_cost} onChange={(v) => set(i, "unit_cost", v)} placeholder={item?.unit_cost != null ? `${item.unit_cost} (price list)` : "0.00"} />
+                    </span>
+                  </label>
+                  <label>
+                    How much
+                    <select value={p.how} onChange={(e) => set(i, "how", e.target.value)}>
+                      <option value="task">Follows the task's amount</option>
+                      <option value="area">Covers the court area</option>
+                      <option value="fixed">A set amount</option>
+                    </select>
+                  </label>
+                </div>
+                {p.how === "task" && (
+                  <div className="le-per">
+                    <NumInput decimals={3} value={p.per_amount} onChange={(v) => set(i, "per_amount", v)} placeholder="1" aria-label="How much" />
+                    <span>{p.unit || "units"} for every</span>
+                    <NumInput decimals={2} value={p.per_every} onChange={(v) => set(i, "per_every", v)} placeholder="1" aria-label="For every" />
+                    <span>{taskUnit} of the task</span>
+                  </div>
+                )}
+                {p.how === "area" && (
+                  <div className="le-per">
+                    <span>One {p.unit || "unit"} covers</span>
+                    <NumInput decimals={1} value={p.coverage} onChange={(v) => set(i, "coverage", v)} placeholder={item?.coverage_sf ? String(item.coverage_sf) : "SF"} aria-label="SF per coat" />
+                    <span>SF a coat,</span>
+                    <NumInput decimals={1} value={p.coats} onChange={(v) => set(i, "coats", v)} placeholder="2" aria-label="Coats" />
+                    <span>coats</span>
+                  </div>
+                )}
+                {p.how === "fixed" && (
+                  <div className="le-per">
+                    <NumInput decimals={2} value={p.quantity} onChange={(v) => set(i, "quantity", v)} placeholder="1" aria-label="How many" />
+                    <span>{p.unit || "units"} on every estimate</span>
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      )}
+      <button type="button" className="btn-ghost" onClick={() => onChange([...parts, blankPart()])}>
+        + Add a material, machine or fee
+      </button>
+    </fieldset>
+  );
+}
 const optNum = (v) => (v === "" || v == null ? null : Number(v));
 
 function TaskForm({ task, onSaved, onCancel }) {
@@ -57,9 +169,14 @@ function TaskForm({ task, onSaved, onCancel }) {
       ? {
           ...task, aliases: task.aliases.join("\n"), cost_rate: task.cost_rate ?? "", charge_rate: task.charge_rate ?? "", unit: task.unit ?? "hr",
           production_rate: task.production_rate ?? "", unit_price: task.unit_price ?? "", coats: task.coats ?? "",
+          all_in: !!task.all_in, parts: (task.parts ?? []).map(partForm),
         }
       : blankTask()
   );
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    api("/api/items").then(setItems).catch(() => {});
+  }, []);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
@@ -71,6 +188,7 @@ function TaskForm({ task, onSaved, onCancel }) {
       const body = {
         ...f, cost_rate: optNum(f.cost_rate), charge_rate: optNum(f.charge_rate),
         production_rate: optNum(f.production_rate), unit_price: optNum(f.unit_price), coats: optNum(f.coats),
+        parts: f.parts.filter((p) => p.description.trim()).map(partBody),
       };
       delete body.id;
       delete body.active;
@@ -165,6 +283,21 @@ function TaskForm({ task, onSaved, onCancel }) {
             )}
           </div>
         </fieldset>
+        {f.kind === "crew" && (
+          <fieldset className="span-2 measure">
+            <legend>How it's priced on an estimate</legend>
+            <div className="seg">
+              <button type="button" aria-pressed={!f.all_in} onClick={() => set("all_in", false)}>Built up</button>
+              <button type="button" aria-pressed={f.all_in} onClick={() => set("all_in", true)}>By the unit, all in</button>
+            </div>
+            <p className="help">
+              {f.all_in
+                ? "One price per unit covers everything (e.g. clearing by the acre). Its materials and machine time are our cost inside that price."
+                : "The labor at its rate, plus each material and machine part with its own markup."}
+            </p>
+          </fieldset>
+        )}
+        {f.kind === "crew" && <PartsEditor parts={f.parts} unit={f.unit} items={items} onChange={(v) => set("parts", v)} />}
         <label className="span-2">
           Notes <span className="optional">(what's included, equipment it needs…)</span>
           <textarea rows={2} value={f.notes} onChange={(e) => set("notes", e.target.value)} />
@@ -204,6 +337,17 @@ function TaskList({ me }) {
     setEditing(null);
     reload();
   };
+  async function loadParts() {
+    setMsg(null);
+    try {
+      const r = await api("/api/library/tasks/starter-parts", { method: "POST" });
+      await reloadLibrary();
+      setMsg(r.filled ? `Gave ${r.filled} tasks their usual parts.` : "No starter tasks without parts.");
+      reload();
+    } catch (e) {
+      setMsg(e.message);
+    }
+  }
   async function loadStarter() {
     setMsg(null);
     try {
@@ -248,6 +392,15 @@ function TaskList({ me }) {
           </button>
         </div>
       )}
+      {isGM && data.tasks.length >= 10 && !data.tasks.some((t) => t.parts?.length) && (
+        <div className="follow-note">
+          <p>
+            <b>Give the starter tasks their usual materials?</b> Resurfacer brings resurfacer and sand, color coat brings color, base rock brings rock and truck loads,
+            and so on, with ballpark amounts to check. Only tasks with nothing set yet get them.
+          </p>
+          <button className="btn" onClick={loadParts}>Add the starter parts</button>
+        </div>
+      )}
       {msg && <p className="help">{msg}</p>}
       {editing === "new" && (
         <section className="panel">
@@ -288,9 +441,13 @@ function TaskList({ me }) {
                     <span className="sub">
                       {TASK_TYPE_LABEL[t.task_type]}
                       {t.kind === "sub" && " · usually a sub"}
+                      {t.kind === "crew" && t.all_in && " · priced all in"}
                       {t.via && ` · matched “${t.via}”`}
                     </span>
                     {t.aliases.length > 0 && <span className="sub alias-line">Also: {t.aliases.join(", ")}</span>}
+                    {t.parts?.length > 0 && (
+                      <span className="sub alias-line">Brings: {t.parts.map((x) => x.description).join(", ")}</span>
+                    )}
                   </span>
                   <span className="row-side">
                     {t.kind === "crew" ? (

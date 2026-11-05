@@ -140,7 +140,7 @@ function Viewer({ photo, onClose, onRemoved }) {
 
 /* The photo grid with an "Add photos" button. With no `id` yet (a new
    lead), picked photos wait in `pending` and go up when it's saved. */
-export default function Photos({ kind, id, canAdd = true, pending, onPending, title = "Photos" }) {
+export default function Photos({ kind, id, canAdd = true, pending, onPending, title = "Photos", when = "save" }) {
   const [list, setList] = useState(null);
   const [n, setN] = useState(0);
   const [open, setOpen] = useState(null);
@@ -198,7 +198,7 @@ export default function Photos({ kind, id, canAdd = true, pending, onPending, ti
             ))}
           </div>
           <p className="help">
-            {pending.length} photo{pending.length > 1 ? "s" : ""} will upload when you save.{" "}
+            {pending.length} photo{pending.length > 1 ? "s" : ""} will upload when you {when}.{" "}
             <button type="button" className="link" onClick={() => onPending([])}>
               Clear
             </button>
@@ -206,7 +206,7 @@ export default function Photos({ kind, id, canAdd = true, pending, onPending, ti
         </>
       )}
       {id && list && !shown.length && <p className="help">No photos yet.{canAdd ? " Tap Add photos to pick from the camera roll or take one." : ""}</p>}
-      {!id && !pending?.length && canAdd && <p className="help">Pick from the camera roll or take one. They upload when you save.</p>}
+      {!id && !pending?.length && canAdd && <p className="help">Pick from the camera roll or take one. They upload when you {when}.</p>}
       {shown.length > 0 && (
         <div className="ph-grid">
           {shown.map((p) => (

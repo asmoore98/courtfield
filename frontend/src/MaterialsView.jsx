@@ -22,6 +22,7 @@ function ItemForm({ item, onSaved, onCancel }) {
     unit_cost: item?.unit_cost ?? "",
     sku: item?.sku ?? "",
     track_stock: item?.track_stock ?? true,
+    coverage_sf: item?.coverage_sf ?? "",
   }));
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -32,7 +33,7 @@ function ItemForm({ item, onSaved, onCancel }) {
     e.preventDefault();
     setError(null);
     setBusy(true);
-    const body = { ...f, name: f.name.trim(), unit: f.unit.trim(), unit_cost: Number(f.unit_cost || 0) };
+    const body = { ...f, name: f.name.trim(), unit: f.unit.trim(), unit_cost: Number(f.unit_cost || 0), coverage_sf: f.coverage_sf === "" ? null : Number(f.coverage_sf) };
     try {
       await (item ? api(`/api/items/${item.id}`, { method: "PATCH", body }) : api("/api/items", { method: "POST", body }));
       onSaved();
@@ -69,6 +70,12 @@ function ItemForm({ item, onSaved, onCancel }) {
             <input id={id("cost")} type="number" inputMode="decimal" min="0" step="0.01" value={f.unit_cost} onChange={set("unit_cost")} />
           </span>
         </label>
+        {f.category === "material" && (
+          <label htmlFor={id("cov")}>
+            Covers (SF a coat)
+            <input id={id("cov")} type="number" inputMode="decimal" min="0" step="any" value={f.coverage_sf} onChange={set("coverage_sf")} placeholder="Coatings only" />
+          </label>
+        )}
         <label htmlFor={id("sku")}>
           Supplier part number
           <input id={id("sku")} value={f.sku} onChange={set("sku")} maxLength={60} placeholder="Optional" />
@@ -206,6 +213,22 @@ function PriceList({ me, refresh = 0 }) {
   const canStock = me.manages_stock;
   const seesCost = me.sees_dollars;
 
+  async function checked(item) {
+    await api(`/api/items/${item.id}`, { method: "PATCH", body: { price_checked: true } });
+    load();
+  }
+  const [starterMsg, setStarterMsg] = useState(null);
+  async function loadStarter() {
+    setStarterMsg(null);
+    try {
+      const r = await api("/api/items/starter", { method: "POST" });
+      setStarterMsg(r.added ? `Added ${r.added} items with ballpark prices. Each one says "Starter price" until it's checked.` : "Everything on the starter list is already here.");
+      load();
+    } catch (e) {
+      setStarterMsg(e.message);
+    }
+  }
+
   async function setActive(item, active) {
     await api(`/api/items/${item.id}`, { method: "PATCH", body: { active } });
     load();
@@ -225,6 +248,21 @@ function PriceList({ me, refresh = 0 }) {
         </div>
       </div>
       {open?.kind === "add" && <ItemForm onSaved={done} onCancel={() => setOpen(null)} />}
+      {canEdit && items.length < 20 && (
+        <div className="follow-note">
+          <p>
+            <b>Start with the starter material list?</b> About 35 common coatings, base rock, concrete, fence, nets and rentals with ballpark prices, so estimates have
+            something to work from. Each one is marked <i>Starter price</i> until someone checks it against a real quote.
+          </p>
+          <button className="btn" onClick={loadStarter}>Add the starter list</button>
+        </div>
+      )}
+      {starterMsg && <p className="help">{starterMsg}</p>}
+      {seesCost && items.some((i) => i.starter_price) && (
+        <p className="help t-near">
+          {items.filter((i) => i.starter_price).length} prices are still ballpark starter prices. Fix them with Edit, or tap “It's right” once checked.
+        </p>
+      )}
       {!items.length ? (
         <p className="empty">
           {canEdit
@@ -249,10 +287,24 @@ function PriceList({ me, refresh = 0 }) {
                   <tr className={i.active ? "" : "is-removed"}>
                     <th scope="row">
                       {i.name}
-                      <span className="sub">{CAT[i.category]}{i.sku ? ` · ${i.sku}` : ""}{!i.active ? " · Not in use" : ""}</span>
+                      <span className="sub">
+                        {CAT[i.category]}{i.sku ? ` · ${i.sku}` : ""}{i.coverage_sf ? ` · covers ${fmt(i.coverage_sf)} SF a coat` : ""}{!i.active ? " · Not in use" : ""}
+                      </span>
                     </th>
                     <td>{i.unit}</td>
-                    {seesCost && <td className="num">{money2(i.unit_cost)}</td>}
+                    {seesCost && (
+                      <td className="num">
+                        {money2(i.unit_cost)}
+                        {i.starter_price && (
+                          <span className="starter-flag">
+                            Starter price
+                            {canEdit && (
+                              <button className="link" onClick={() => checked(i)} title="Mark this price as checked">It's right</button>
+                            )}
+                          </span>
+                        )}
+                      </td>
+                    )}
                     <td className={`num ${i.on_hand != null && i.on_hand < 0 ? "t-over" : ""}`}>
                       {i.on_hand == null ? <span className="sub-inline">Not stocked</span> : fmt(i.on_hand)}
                     </td>

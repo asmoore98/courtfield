@@ -72,5 +72,33 @@ export function fromTemplate(t, defaults) {
     unit_price: t.unit_price ?? "",
     coats: unit === "sf_coat" ? t.coats ?? 2 : "",
     follows: defaultFollows(unit, t.task_type),
+    all_in: !!t.all_in,
   };
+}
+
+// The lines a library task brings onto an estimate: its materials, machine
+// time and fees. A blank cost takes the price list's price.
+export function linesFromParts(t, taskKey, items = []) {
+  const byId = Object.fromEntries(items.map((i) => [i.id, i]));
+  return (t.parts ?? []).map((p) => {
+    const item = p.item_id ? byId[p.item_id] : null;
+    return {
+      key: crypto.randomUUID?.() ?? String(Math.random()),
+      category: p.category,
+      description: p.description,
+      item_id: item ? p.item_id : null,
+      unit: p.unit || item?.unit || "",
+      unit_cost: p.unit_cost != null ? String(p.unit_cost) : item?.unit_cost != null ? String(item.unit_cost) : "",
+      in_house: !!p.in_house,
+      task_key: taskKey,
+      quantity: p.how === "fixed" && p.quantity != null ? String(p.quantity) : "",
+      follows: p.how === "task" ? "task" : p.how === "area" ? "paint" : "",
+      per_amount: p.per_amount != null ? String(p.per_amount) : "",
+      per_every: p.per_every != null ? String(p.per_every) : "1",
+      coverage: p.coverage != null ? String(p.coverage) : item?.coverage_sf != null ? String(item.coverage_sf) : "",
+      coats: p.coats != null ? String(p.coats) : "",
+      markup_pct: "",
+      from_template: t.id,
+    };
+  });
 }

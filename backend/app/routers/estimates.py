@@ -51,24 +51,38 @@ def totals(d: EstimateData) -> dict:
     its own markup (or the default for its kind; materials are marked up with
     their tax); then the markup on the whole job; then the adjustment.
     Fees (permits, city fees) pass through at cost: no markup of any kind.
+    A task priced by the unit, all in, charges its quantity x price per unit;
+    its own lines are cost inside that price, never charged on top.
     """
     crew = [t for t in d.tasks if t.kind == TaskKind.crew]
     subs = [t for t in d.tasks if t.kind == TaskKind.sub]
+    rate = lambda t: t.cost_rate if t.cost_rate is not None else d.estimated_labor_rate  # noqa: E731
     hours = sum(t.estimated_hours for t in crew)
-    labor = sum(t.estimated_hours * (t.cost_rate if t.cost_rate is not None else d.estimated_labor_rate) for t in crew)
+    labor = sum(t.estimated_hours * rate(t) for t in crew)
     cat = {"material": 0.0, "equipment": 0.0, "subcontractor": 0.0, "other": 0.0, "fee": 0.0}
-    charge = {"labor": sum(labor_charge(t) for t in crew),
-              "material": 0.0, "equipment": 0.0, "subcontractor": 0.0, "other": 0.0}
+    all_in = {i for i, t in enumerate(d.tasks) if t.kind == TaskKind.crew and t.all_in}
+    # What's inside the all-in tasks' prices, by kind (materials with their tax).
+    inside_cost = {"labor": sum(d.tasks[i].estimated_hours * rate(d.tasks[i]) for i in all_in),
+                   "material": 0.0, "equipment": 0.0, "other": 0.0, "fee": 0.0}
+    charge = {"labor": sum(labor_charge(t) for i, t in enumerate(d.tasks) if t.kind == TaskKind.crew and i not in all_in),
+              "material": 0.0, "equipment": 0.0, "subcontractor": 0.0, "other": 0.0,
+              "all_in": sum(labor_charge(d.tasks[i]) for i in all_in)}
     fees = 0.0
     tax = 0.0
     for ln in d.cost_lines:
         k = ln.category.value
         cost = ln.quantity * ln.unit_cost
+        line_tax = cost * d.sales_tax_pct / 100 if k == "material" else 0.0
+        if ln.task_index in all_in:  # our cost inside an all-in price per unit
+            inside_cost[k if k in inside_cost else "other"] += cost + line_tax
+            if k != "fee":
+                cat[k] += cost
+            tax += line_tax
+            continue
         if k == "fee":
             cat["fee"] += cost
             fees += cost
             continue
-        line_tax = cost * d.sales_tax_pct / 100 if k == "material" else 0.0
         m = ln.markup_pct if ln.markup_pct is not None else getattr(d.markups, k)
         cat[k] += cost
         tax += line_tax
@@ -77,7 +91,7 @@ def totals(d: EstimateData) -> dict:
         m = t.markup_pct if t.markup_pct is not None else d.markups.subcontractor
         cat["subcontractor"] += t.sub_price or 0
         charge["subcontractor"] += (t.sub_price or 0) * (1 + m / 100)
-    total = labor + tax + sum(cat.values())
+    total = labor + tax + sum(cat.values()) + inside_cost["fee"]
     subtotal = sum(charge.values())
     overall = subtotal * d.overall_markup / 100
     built = subtotal + overall + fees
@@ -88,7 +102,8 @@ def totals(d: EstimateData) -> dict:
             "overall_markup": d.overall_markup if d.priced == "built" else 0, "overall_amount": round(overall, 2),
             "built_price": round(built, 2), "adjustment": d.adjustment if d.priced == "built" else 0, "priced": d.priced,
             "price": price, "profit": profit, "margin_pct": profit / price if price > 0 else None,
-            "markup_pct": profit / total if total > 0 else None}
+            "markup_pct": profit / total if total > 0 else None,
+            "all_in": {"cost": round(sum(inside_cost.values()), 2), **{k: round(v, 2) for k, v in inside_cost.items()}}}
 
 
 def finalize(d: EstimateData) -> EstimateData:

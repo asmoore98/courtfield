@@ -11,6 +11,19 @@ from the quantity instead of guessed:
 
 What we charge for crew work is quantity x price per unit when the task has
 one, otherwise hours x the charge rate. Mirrored in frontend/src/qty.js.
+
+A task is priced one of two ways (estimates):
+    built up (the default)  each part has its price: the labor by its rate,
+                            each material, machine or other line with its markup
+    by the unit ("all in")  the customer pays quantity x price per unit; the
+                            task's materials and machine time are our cost
+                            inside that price, not charged on top
+
+Base rock, fill and concrete can be worked out from their size: length x
+width x depth gives cubic yards, and tons at so many tons per cubic yard.
+A line on a task can follow the task's amount: "0.75 hr for every 20 ton"
+(machine time per load, whole loads) or "1.05 ton for every 1 ton" (extra
+for waste).
 """
 import math
 
@@ -47,6 +60,50 @@ def labor_charge(t) -> float:
     if t.unit != "hr" and t.unit_price is not None:
         return total_units(t.unit, t.quantity, t.coats) * t.unit_price
     return t.estimated_hours * (t.charge_rate or 0)
+
+
+TONS_PER_CY = 1.4  # crushed base rock, roughly; set per task
+
+
+def size_quantity(unit: str, length_ft: float | None, width_ft: float | None, depth_in: float | None,
+                  tons_per_cy: float | None) -> float | None:
+    """The quantity from a length and width (SF, SY) or with a depth too
+    (CY, tons). None when the sizes it needs aren't there."""
+    if not length_ft or not width_ft:
+        return None
+    sf = length_ft * width_ft
+    if unit == "sf":
+        return round(sf, 2)
+    if unit == "sy":
+        return round(sf / 9, 2)
+    if unit in ("cy", "ton"):
+        if not depth_in:
+            return None
+        cy = sf * depth_in / 12 / 27
+        return round(cy if unit == "cy" else cy * (tons_per_cy or TONS_PER_CY), 2)
+    return None
+
+
+def task_units(t) -> float:
+    """How much of the task there is, for lines that follow it: its quantity
+    (times coats), or its hours when it's measured in hours."""
+    if t.unit == "hr":
+        return t.estimated_hours or 0.0
+    return total_units(t.unit, t.quantity, t.coats)
+
+
+def per_task_qty(units: float, amount: float | None, every: float | None, category: str) -> float:
+    """A line that follows its task: `amount` for every `every` units of the
+    task. Per load or batch (every > 1) counts whole loads; materials are
+    bought in whole units."""
+    if not amount or units <= 0:
+        return 0.0
+    every = every or 1.0
+    loads = units / every
+    if every > 1:
+        loads = math.ceil(round(loads, 6))
+    q = loads * amount
+    return float(math.ceil(round(q, 6))) if category == "material" else round(q, 2)
 
 
 def material_qty(area: float, coats: float | None, coverage: float) -> float:

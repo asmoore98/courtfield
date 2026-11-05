@@ -33,9 +33,9 @@ def test_price_list_roles_and_prices_hidden(client):
     for t in (WH, LEAD):
         items = client.get("/api/items", headers=auth(t)).json()
         assert items and all("unit_cost" not in i for i in items)
-    r = client.post("/api/items", json={"name": "Windscreen", "unit": "roll", "unit_cost": 210, "track_stock": True}, headers=auth(EST))
+    r = client.post("/api/items", json={"name": "Windscreen, black 9 ft", "unit": "roll", "unit_cost": 210, "track_stock": True}, headers=auth(EST))
     assert r.status_code == 201
-    assert client.post("/api/items", json={"name": "windscreen", "unit_cost": 1}, headers=auth(GM)).status_code == 409
+    assert client.post("/api/items", json={"name": "windscreen, BLACK 9 ft", "unit_cost": 1}, headers=auth(GM)).status_code == 409
     for t in (WH, LEAD, OWNER):
         assert client.post("/api/items", json={"name": "X"}, headers=auth(t)).status_code == 403
     assert client.patch(f"/api/items/{r.json()['id']}", json={"unit_cost": 225}, headers=auth(GM)).json()["unit_cost"] == 225
