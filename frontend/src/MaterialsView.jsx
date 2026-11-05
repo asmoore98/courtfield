@@ -1,6 +1,9 @@
 // Materials tab: the price list (estimators and GM set prices), warehouse
 // stock on hand (receive deliveries, correct counts), and each open job's
 // material list for the warehouse to load out and check back in.
+import MaterialRequests from "./MaterialRequests";
+import MaterialCheck from "./MaterialCheck";
+import { crewLine } from "./CrewForm";
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import { COST_CATEGORIES } from "./JobEditor";
@@ -296,33 +299,57 @@ function PriceList({ me, refresh = 0 }) {
 
 function JobLists({ me, onChanged }) {
   const [jobs, setJobs] = useState(null);
+  const [checks, setChecks] = useState({});
   const [openJob, setOpenJob] = useState(null);
+  const loadChecks = () => api("/api/material-checks/latest").then(setChecks).catch(() => {});
   useEffect(() => {
-    api("/api/jobs").then((js) => setJobs(js.filter((j) => j.status !== "complete"))).catch(() => setJobs([]));
+    // Soonest start first: that's the next truck to load.
+    const order = (j) => (j.status === "active" ? "0" : j.start_date ?? "9999");
+    api("/api/jobs")
+      .then((js) => setJobs(js.filter((j) => j.status !== "complete").sort((a, b) => (order(a) < order(b) ? -1 : 1))))
+      .catch(() => setJobs([]));
+    loadChecks();
   }, []);
   if (!jobs) return null;
   return (
     <section className="panel">
       <h3>Job material lists</h3>
+      <p className="help">Send material to a job here, then check the truck before it leaves. The crew lead checks it again on site.</p>
       {!jobs.length ? (
         <p className="empty">No scheduled or active jobs.</p>
       ) : (
         <ul className="joblist">
-          {jobs.map((j) => (
-            <li key={j.id}>
-              <button className={`jobrow ${openJob === j.id ? "is-open" : ""}`} onClick={() => setOpenJob(openJob === j.id ? null : j.id)} aria-expanded={openJob === j.id}>
-                <span className="jobrow-head">
-                  <span className="jobrow-name">{j.name}</span>
-                  <span className={`chip chip-${j.status}`}>{j.status === "active" ? "In progress" : "Scheduled"}</span>
-                </span>
-              </button>
-              {openJob === j.id && (
-                <div className="job-mats-wrap">
-                  <JobMaterials jobId={j.id} me={me} onChanged={onChanged} />
-                </div>
-              )}
-            </li>
-          ))}
+          {jobs.map((j) => {
+            const c = checks[j.id] ?? {};
+            return (
+              <li key={j.id}>
+                <button className={`jobrow ${openJob === j.id ? "is-open" : ""}`} onClick={() => setOpenJob(openJob === j.id ? null : j.id)} aria-expanded={openJob === j.id}>
+                  <span className="jobrow-head">
+                    <span className="jobrow-name">{j.name}</span>
+                    <span className={`chip chip-${j.status}`}>{j.status === "active" ? "In progress" : "Scheduled"}</span>
+                  </span>
+                  <span className="jobrow-foot">
+                    <span>{crewLine(j)}</span>
+                    <span className={c.loaded ? (c.loaded.all_here ? "t-under" : "t-over") : "t-near"}>
+                      {c.loaded ? (c.loaded.all_here ? "Truck checked" : "Truck checked: some short") : "Truck not checked"}
+                    </span>
+                    {c.on_site && (
+                      <span className={c.on_site.all_here ? "t-under" : "t-over"}>
+                        {c.on_site.all_here ? "All there on site" : "Short on site"}
+                      </span>
+                    )}
+                  </span>
+                </button>
+                {openJob === j.id && (
+                  <div className="job-mats-wrap">
+                    <JobMaterials jobId={j.id} me={me} onChanged={onChanged} />
+                    <h4 className="mc-title">Before the truck leaves</h4>
+                    <MaterialCheck key={`${j.id}-check`} jobId={j.id} kind="loaded" onSaved={loadChecks} />
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>
@@ -334,6 +361,9 @@ export default function MaterialsView({ me }) {
   return (
     <div className="materials">
       <h2 className="detail-title">Materials</h2>
+      {["gm", "pm", "warehouse"].includes(me.role) && (
+        <MaterialRequests canHandle title="Asked for from the field" onChanged={() => setRefresh((n) => n + 1)} />
+      )}
       {me.manages_stock && <JobLists me={me} onChanged={() => setRefresh((n) => n + 1)} />}
       <PriceList me={me} refresh={refresh} />
     </div>

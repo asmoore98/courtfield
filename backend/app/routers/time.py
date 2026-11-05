@@ -1,7 +1,15 @@
-"""Field time: crew list, offline-friendly sync, entry listing, and office
-corrections (add, fix, remove) with an audit trail."""
+"""Field time: crew list, offline-friendly sync, entry listing, and
+corrections (add, fix, remove) with an audit trail.
+
+The GM corrects time on any job. A crew lead fixes their own crew's time on
+the jobs they run, for the last week, and can't change what the office has
+already corrected. Every change needs a reason, keeps what the entry was
+before and after, and shows on the job's history; the office sees which
+entries a crew lead changed.
+"""
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import or_, select
@@ -10,7 +18,8 @@ from sqlalchemy.orm import Session, selectinload
 from ..auth import ENTERS_TIME, SEES_DOLLARS, current_user, require_roles
 from ..costing import entry_hours, is_off_site
 from ..db import get_db
-from ..models import Job, JobTask, Role, TimeEntry, TimeEntryChange, User, new_id, utcnow
+from ..activity import log
+from ..models import Company, Job, JobTask, Role, TimeEntry, TimeEntryChange, User, new_id, utcnow
 from ..schemas import (
     OfficeTimeEdit, OfficeTimeIn, RemoveIn, SyncIn, SyncOut, SyncResult, TimeChangeOut,
     TimeEntryIn, TimeEntryOut, UserOut, to_naive_utc,
@@ -23,8 +32,10 @@ FUTURE_SLACK = timedelta(minutes=10)  # phone clocks drift
 FIELD_ROLES = (Role.crew, Role.crew_lead)
 _COMPARED = ("job_id", "task_id", "worker_id", "clock_in", "clock_out",
              "in_lat", "in_lng", "out_lat", "out_lng", "note")
-# Who corrects time from the office. Kept to the GM so there is one owner of payroll hours.
-CORRECTS_TIME = (Role.gm,)
+# Who corrects time. The GM owns payroll hours; a crew lead fixes their own
+# crew's recent time (see _lead_check).
+CORRECTS_TIME = (Role.gm, Role.crew_lead)
+LEAD_FIX_WINDOW = timedelta(days=7)
 
 
 @router.get("/crew", response_model=list[UserOut])
@@ -159,7 +170,12 @@ def list_time(
         .limit(1000)
     )
     if job_id:
+        if user.role == Role.crew_lead:
+            from .jobs import load_job
+            load_job(db, user, job_id)  # only the jobs they run
         q = q.where(TimeEntry.job_id == job_id)
+    elif user.role == Role.crew_lead:  # their jobs, and anyone they clocked in
+        q = q.where(or_(TimeEntry.job_id.in_(select(Job.id).where(Job.crew_lead_id == user.id)), TimeEntry.entered_by_id == user.id))
     if open_only:
         q = q.where(TimeEntry.clock_out.is_(None))
     if not include_removed or open_only:
@@ -167,15 +183,27 @@ def list_time(
     if since:
         q = q.where(or_(TimeEntry.clock_in >= to_naive_utc(since), TimeEntry.clock_out.is_(None)))
     rows = list(db.scalars(q))
-    edited = set(db.scalars(
-        select(TimeEntryChange.entry_id).where(
-            TimeEntryChange.entry_id.in_([e.id for e in rows]), TimeEntryChange.action != "add")
-    ))
+    changes = db.execute(
+        select(TimeEntryChange.entry_id, TimeEntryChange.action, User.role)
+        .join(User, User.id == TimeEntryChange.changed_by_id)
+        .where(TimeEntryChange.entry_id.in_([e.id for e in rows]))
+    ).all()
+    edited = {c.entry_id for c in changes if c.action != "add"}
+    by_lead = {c.entry_id for c in changes if c.role == Role.crew_lead}
+    by_office = {c.entry_id for c in changes if c.role != Role.crew_lead}
     jobs: dict[str, Job] = {}
     out = []
+    now = utcnow()
     for e in rows:
         job = jobs.get(e.job_id) or jobs.setdefault(e.job_id, db.get(Job, e.job_id))
-        out.append(_out(e, job, e.id in edited))
+        o = _out(e, job, e.id in edited)
+        o.changed_by_lead = e.id in by_lead
+        if user.role == Role.gm:
+            o.can_fix = e.voided_at is None
+        elif user.role == Role.crew_lead:
+            o.can_fix = (e.voided_at is None and job.crew_lead_id == user.id and e.id not in by_office
+                         and now - e.clock_in <= LEAD_FIX_WINDOW)
+        out.append(o)
     return out
 
 
@@ -201,13 +229,65 @@ def _load_entry(db: Session, user: User, entry_id: str) -> TimeEntry:
     e = db.get(TimeEntry, entry_id)
     if e is None or e.company_id != user.company_id:
         raise HTTPException(404, "Time entry not found")
+    if user.role == Role.crew_lead:
+        job = db.get(Job, e.job_id)
+        if job.crew_lead_id != user.id and e.entered_by_id != user.id:
+            raise HTTPException(404, "Time entry not found")
     return e
+
+
+def _lead_check(db: Session, user: User, job_id: str, clock_in, entry: TimeEntry | None = None) -> None:
+    """A crew lead: only on a job they run, only the last week, and not an
+    entry the office has already corrected."""
+    if user.role != Role.crew_lead:
+        return
+    job = db.get(Job, job_id)
+    if job is None or job.company_id != user.company_id or job.crew_lead_id != user.id:
+        raise HTTPException(403, "You can only fix time on the jobs you run.")
+    if utcnow() - clock_in > LEAD_FIX_WINDOW:
+        raise HTTPException(403, "Time older than a week can only be fixed by the office.")
+    if entry is not None:
+        office = db.scalar(select(TimeEntryChange.id).join(User, User.id == TimeEntryChange.changed_by_id)
+                           .where(TimeEntryChange.entry_id == entry.id, User.role != Role.crew_lead))
+        if office:
+            raise HTTPException(403, "The office already corrected this entry. Ask them to change it.")
+
+
+def _clock(v, tz: str = "America/New_York") -> str:
+    """A stored UTC time as the company's local clock, e.g. "11/5 7:00 AM"."""
+    if v is None:
+        return "on the clock"
+    local = v.replace(tzinfo=timezone.utc).astimezone(ZoneInfo(tz))
+    return f"{local.month}/{local.day} {local.strftime('%I:%M %p').lstrip('0')}"
+
+
+def _on_job(db: Session, user: User, e: TimeEntry, what: str, reason: str, before: dict | None = None) -> None:
+    """Every crew lead change is also written on the job's history, so the
+    office sees it without opening the time log."""
+    if user.role != Role.crew_lead:
+        return
+    who = "their own time" if e.worker_id == user.id else f"{e.worker.name}'s time"
+    tz = _tz(db, user)
+    now_txt = f"{e.task.name}, {_clock(e.clock_in, tz)} to {_clock(e.clock_out, tz)}"
+    detail = f"Was {before['task']}, {before['in']} to {before['out']}. " if before else ""
+    detail += ("Now " + now_txt if what != "Removed" else "") + f". Why: {reason.strip()}"
+    log(db, user, "job", e.job_id, f"{what} {who}", detail.lstrip(". "))
+
+
+def _tz(db: Session, user: User) -> str:
+    c = db.get(Company, user.company_id)
+    return c.timezone if c else "America/New_York"
+
+
+def _brief(e: TimeEntry, tz: str) -> dict:
+    return {"task": e.task.name, "in": _clock(e.clock_in, tz), "out": _clock(e.clock_out, tz)}
 
 
 @router.post("/time/office", response_model=TimeEntryOut, status_code=201)
 def add_office_time(body: OfficeTimeIn, user: User = Depends(require_roles(*CORRECTS_TIME)), db: Session = Depends(get_db)):
     now = utcnow()
     candidate = TimeEntryIn(id=new_id(), client_updated_at=now, **body.model_dump(exclude={"reason"}))
+    _lead_check(db, user, candidate.job_id, candidate.clock_in)
     reason = _validate(db, user.company_id, candidate)
     if reason:
         raise HTTPException(422, f"Can't add this time: {reason}.")
@@ -215,6 +295,7 @@ def add_office_time(body: OfficeTimeIn, user: User = Depends(require_roles(*CORR
                   **candidate.model_dump())
     db.add(e)
     _record(db, user, e, "add", body.reason)
+    _on_job(db, user, e, "Added", body.reason)
     db.commit()
     return _out(e, db.get(Job, e.job_id), False)
 
@@ -225,7 +306,8 @@ def edit_office_time(entry_id: str, body: OfficeTimeEdit, user: User = Depends(r
     e = _load_entry(db, user, entry_id)
     if e.voided_at is not None:
         raise HTTPException(409, "This entry was removed. Add new time instead.")
-    before = _snapshot(e)
+    _lead_check(db, user, e.job_id, e.clock_in, e)
+    before, brief = _snapshot(e), _brief(e, _tz(db, user))
     changes = {k: getattr(body, k) for k in body.model_fields_set if k != "reason"}
     if not changes:
         raise HTTPException(422, "Nothing to change")
@@ -235,6 +317,7 @@ def edit_office_time(entry_id: str, body: OfficeTimeEdit, user: User = Depends(r
         clock_in=changes.get("clock_in", e.clock_in), clock_out=changes["clock_out"] if "clock_out" in changes else e.clock_out,
         client_updated_at=utcnow(),
     )
+    _lead_check(db, user, e.job_id, candidate.clock_in)
     reason = _validate(db, user.company_id, candidate)
     if reason:
         raise HTTPException(422, f"Can't save this change: {reason}.")
@@ -242,6 +325,7 @@ def edit_office_time(entry_id: str, body: OfficeTimeEdit, user: User = Depends(r
         setattr(e, k, getattr(candidate, k))
     e.office_edited = True
     _record(db, user, e, "edit", body.reason, before)
+    _on_job(db, user, e, "Changed", body.reason, brief)
     db.commit()
     return _out(e, db.get(Job, e.job_id), True)
 
@@ -252,16 +336,18 @@ def remove_office_time(entry_id: str, body: RemoveIn, user: User = Depends(requi
     e = _load_entry(db, user, entry_id)
     if e.voided_at is not None:
         raise HTTPException(409, "This entry was already removed")
-    before = _snapshot(e)
+    _lead_check(db, user, e.job_id, e.clock_in, e)
+    before, brief = _snapshot(e), _brief(e, _tz(db, user))
     e.voided_at, e.voided_by_id, e.void_reason = utcnow(), user.id, body.reason.strip()
     e.office_edited = True
     _record(db, user, e, "remove", body.reason, before)
+    _on_job(db, user, e, "Removed", body.reason, brief)
     db.commit()
     return _out(e, db.get(Job, e.job_id), True)
 
 
 @router.get("/time/{entry_id}/history", response_model=list[TimeChangeOut])
-def entry_history(entry_id: str, user: User = Depends(require_roles(*SEES_DOLLARS)), db: Session = Depends(get_db)):
+def entry_history(entry_id: str, user: User = Depends(require_roles(*SEES_DOLLARS, Role.crew_lead)), db: Session = Depends(get_db)):
     _load_entry(db, user, entry_id)
     rows = db.scalars(
         select(TimeEntryChange).where(TimeEntryChange.entry_id == entry_id)
@@ -269,6 +355,7 @@ def entry_history(entry_id: str, user: User = Depends(require_roles(*SEES_DOLLAR
     )
     return [
         TimeChangeOut(action=c.action, reason=c.reason, changed_by=c.changed_by.name, changed_at=c.changed_at,
+                      by_crew_lead=c.changed_by.role == Role.crew_lead,
                       before=json.loads(c.before) if c.before else None, after=json.loads(c.after) if c.after else None)
         for c in rows
     ]

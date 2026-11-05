@@ -159,6 +159,8 @@ def test_job_from_built_estimate_keeps_task_rates(client):
     assert costing["estimated_labor_cost"] == 10 * 95 + 8 * 34
     assert costing["estimate"]["subcontractor"] == 5000 and round(costing["estimate"]["total_cost"], 2) == COST
     assert costing["tasks"][2]["kind"] == "sub" and costing["tasks"][2]["sub_price"] == 5000
+    lead_id = client.get("/api/me", headers=auth(LEAD)).json()["id"]
+    client.put(f"/api/jobs/{job_id}/crew", json={"crew_lead_id": lead_id}, headers=auth(GM))
     lead_view = client.get(f"/api/jobs/{job_id}/costing", headers=auth(LEAD)).json()
     assert lead_view["tasks"][2]["kind"] == "sub" and "sub_price" not in lead_view["tasks"][2]  # crew leads never see dollars
 

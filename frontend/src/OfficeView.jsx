@@ -1,11 +1,16 @@
 import { useEffect, useState } from "react";
-import { amountText } from "./qty";
+import MaterialRequests from "./MaterialRequests";
+import MaterialCheck from "./MaterialCheck";
+import { amountText, fmt } from "./qty";
 import { DEMO, api } from "./api";
 import { useScreen } from "./bits";
 import JobEditor, { COST_CATEGORIES, EstimateTable } from "./JobEditor";
 import TimeLog from "./TimeLog";
 import JobMaterials from "./JobMaterials";
-import HoursBar, { HoursText, statusOf } from "./HoursBar";
+import HoursBar, { HoursText, Pace, statusOf } from "./HoursBar";
+import CrewForm, { crewLine, fmtDay } from "./CrewForm";
+import Photos from "./Photos";
+import { ActivityList, NoteAction, fmtWhen } from "./bits";
 
 const money = (n) =>
   n == null ? "" : n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 });
@@ -37,6 +42,8 @@ function WonEstimates({ me, onOpen }) {
   const [won, setWon] = useState([]);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
+  const [sending, setSending] = useState(null); // the estimate being made into a job and sent out
+  const assigns = me.role === "gm" || me.role === "pm";
   useEffect(() => {
     if (!me.estimates || DEMO) return;
     api("/api/estimates?status=won")
@@ -44,21 +51,24 @@ function WonEstimates({ me, onOpen }) {
       .catch(() => {});
   }, [me.estimates]);
   if (!won.length) return null;
-  async function make(e) {
+  async function make(e, crew) {
     setError(null);
     setBusy(e.id);
     try {
-      const { job_id } = await api(`/api/estimates/${e.id}/create-job`, { method: "POST" });
+      const { job_id } = await api(`/api/estimates/${e.id}/create-job`, { method: "POST", ...(crew ? { body: crew } : {}) });
       onOpen(job_id);
     } catch (err) {
       setError(err.message);
       setBusy(null);
+      throw err;
     }
   }
   return (
     <section className="panel won-waiting">
       <h3>Jobs ready to be scheduled</h3>
-      <p className="help">These estimates were won. Create the job to get it on the schedule.</p>
+      <p className="help">
+        These estimates were won. {assigns ? "Make each one a job: pick the start date and the crew, and it goes to the crew lead's phone." : "The GM or a PM makes each one a job and sends it to a crew."}
+      </p>
       <ul className="row-list">
         {won.map((e) => (
           <li key={e.id}>
@@ -69,10 +79,21 @@ function WonEstimates({ me, onOpen }) {
                   {e.number} · {e.client_name} · {money(e.price)}
                 </span>
               </span>
-              <button className="btn" onClick={() => make(e)} disabled={busy === e.id}>
-                {busy === e.id ? "Creating…" : "Create job"}
-              </button>
+              {sending !== e.id && (
+                <button className="btn" onClick={() => (assigns ? setSending(e.id) : make(e).catch(() => {}))} disabled={busy === e.id}>
+                  {busy === e.id ? "Creating…" : assigns ? "Schedule it" : "Create job"}
+                </button>
+              )}
             </div>
+            {sending === e.id && (
+              <CrewForm
+                submitLabel="Create the job and send it out"
+                busyLabel="Creating…"
+                note="Pick the start date and the crew. You can leave the crew for later; it waits under Not sent to a crew yet."
+                onCancel={() => setSending(null)}
+                onSubmit={(crew) => make(e, crew)}
+              />
+            )}
           </li>
         ))}
       </ul>
@@ -91,10 +112,13 @@ function JobList({ me, onOpen, onNew }) {
     <>
     <WonEstimates me={me} onOpen={onOpen} />
     <div className="list-head spread">
-      <p className="help">Jobs come from won estimates.{me.creates_jobs && " For a callback or small job with no estimate:"}</p>
+      <p className="help">
+        Jobs come from won estimates.
+        {me.creates_jobs && " Work that never had an estimate, like a warranty callback or a quick patch, can be added here without one:"}
+      </p>
       {me.creates_jobs && (
         <button className="btn-ghost" onClick={onNew}>
-          New job without an estimate
+          Add a job with no estimate
         </button>
       )}
     </div>
@@ -110,13 +134,16 @@ function JobList({ me, onOpen, onNew }) {
       </>
     );
 
-  const order = { active: 0, scheduled: 1, complete: 2 };
-  const jobs = [...data].sort((a, b) => order[a.status] - order[b.status]);
-  return (
-    <>
-    {newButton}
-    <ul className="joblist">
-      {jobs.map((j) => {
+  // In progress first, then what's starting soonest, then jobs nobody's been
+  // sent yet; finished jobs fold away at the bottom.
+  const byStart = (a, b) => (a.start_date ?? "9999") < (b.start_date ?? "9999") ? -1 : 1;
+  const groups = [
+    ["In progress", data.filter((j) => j.status === "active").sort(byStart)],
+    ["Scheduled", data.filter((j) => j.status === "scheduled" && j.crew_lead_name).sort(byStart)],
+    ["Not sent to a crew yet", data.filter((j) => j.status === "scheduled" && !j.crew_lead_name)],
+  ];
+  const done = data.filter((j) => j.status === "complete");
+  const row = (j) => {
         const tone = statusOf(j.hours_used_pct);
         return (
           <li key={j.job_id}>
@@ -127,6 +154,16 @@ function JobList({ me, onOpen, onNew }) {
                   {STATUS_WORD[j.status]}
                   {j.crew_on_site > 0 && `, ${j.crew_on_site} on site`}
                 </span>
+              </span>
+              {j.on_clock?.length > 0 && <span className="jobrow-onclock">{onClockLine(j.on_clock)}</span>}
+              <span className={`jobrow-crew${j.crew_lead_name ? "" : " t-near"}`}>
+                {crewLine(j)}
+                {j.open_problems > 0 && (
+                  <b className="t-over">
+                    {" "}
+                    · {j.open_problems} problem{j.open_problems > 1 ? "s" : ""} from the site
+                  </b>
+                )}
               </span>
               <HoursBar estimated={j.estimated_hours} actual={j.actual_hours} open={j.open_hours} size="lg" />
               <span className="jobrow-foot">
@@ -149,8 +186,28 @@ function JobList({ me, onOpen, onNew }) {
             </button>
           </li>
         );
-      })}
-    </ul>
+  };
+  return (
+    <>
+    {newButton}
+    {groups.map(([title, list]) =>
+      list.length ? (
+        <section key={title} className="job-group">
+          <h3 className="group-title">
+            {title} <span className="count">{list.length}</span>
+          </h3>
+          <ul className="joblist">{list.map(row)}</ul>
+        </section>
+      ) : null
+    )}
+    {done.length > 0 && (
+      <details className="job-group done-group">
+        <summary className="group-title">
+          Complete <span className="count">{done.length}</span>
+        </summary>
+        <ul className="joblist">{done.map(row)}</ul>
+      </details>
+    )}
     </>
   );
 }
@@ -208,11 +265,179 @@ function EstimatePanel({ jobId, costing, version }) {
   );
 }
 
+// The crew lead starts a job on site (pin, site walk, clock in). The GM can
+// still mark a job in progress by hand, e.g. one that has no crew lead.
 const NEXT_STATUS = {
-  scheduled: ["active", "Start job"],
+  scheduled: ["active", "Mark in progress"],
   active: ["complete", "Mark complete"],
   complete: ["active", "Reopen job"],
 };
+
+// What the crew lead found on site, the crew and start date, photos and history.
+function FieldPanel({ me, jobId, c, onChanged }) {
+  const [editing, setEditing] = useState(false);
+  const [n, setN] = useState(0);
+  const { data } = useLoad(`/api/jobs/${jobId}/reports`, [jobId, n]);
+  const assigns = me.role === "gm" || me.role === "pm";
+  const reports = data?.reports ?? [];
+  const open = reports.filter((r) => r.kind === "problem" && !r.resolved_at);
+  const reload = () => {
+    setN((x) => x + 1);
+    onChanged();
+  };
+  return (
+    <>
+      <section className="panel">
+        <div className="panel-head">
+          <h3>Crew and start date</h3>
+          {assigns && !editing && (
+            <button className="link" onClick={() => setEditing(true)}>
+              {c.crew_lead_name ? "Change" : "Send to a crew"}
+            </button>
+          )}
+        </div>
+        {editing ? (
+          <CrewForm
+            initial={c}
+            submitLabel={c.crew_lead_name ? "Save" : "Send it out"}
+            onCancel={() => setEditing(false)}
+            onSubmit={(body) =>
+              api(`/api/jobs/${jobId}/crew`, { method: "PUT", body }).then(() => {
+                setEditing(false);
+                reload();
+              })
+            }
+          />
+        ) : (
+          <dl className="facts">
+            <div>
+              <dt>Crew lead</dt>
+              <dd>{c.crew_lead_name ?? <span className="t-near">Not sent to a crew yet</span>}</dd>
+            </div>
+            <div>
+              <dt>Crew</dt>
+              <dd>{(c.crew_members ?? []).map((m) => m.name).join(", ") || "—"}</dd>
+            </div>
+            <div>
+              <dt>Start date</dt>
+              <dd>{c.start_date ? fmtDay(c.start_date) : "—"}</dd>
+            </div>
+            <div>
+              <dt>On site</dt>
+              <dd>{c.started_at ? `Started ${fmtWhen(c.started_at)}` : "Not started yet"}</dd>
+            </div>
+          </dl>
+        )}
+      </section>
+
+      <section className={`panel${open.length ? " has-problems" : ""}`}>
+        <h3>
+          From the site{open.length > 0 && <span className="count warn">{open.length} to handle</span>}
+        </h3>
+        {!reports.length ? (
+          <p className="help">Nothing reported yet. Problems the crew lead finds on site (damage, anything different from the estimate) show up here.</p>
+        ) : (
+          <ul className="reports">
+            {reports.map((r) => (
+              <li key={r.id} className={r.kind === "problem" && !r.resolved_at ? "is-open" : ""}>
+                <p className="r-text">
+                  <b>{r.kind === "problem" ? (r.resolved_at ? "Problem (handled)" : "Problem") : "Note"}:</b> {r.text}
+                </p>
+                <p className="sub">
+                  {r.by} · {fmtWhen(r.at)}
+                </p>
+                {r.resolved_at && (
+                  <p className="r-resolved">
+                    Handled by {r.resolved_by} {fmtWhen(r.resolved_at)}: {r.resolution}
+                  </p>
+                )}
+                {assigns && r.kind === "problem" && !r.resolved_at && (
+                  <NoteAction
+                    label="Mark handled"
+                    prompt="What was done about it?"
+                    placeholder="e.g. Called the client, change order sent"
+                    onSubmit={(resolution) => api(`/api/jobs/${jobId}/reports/${r.id}/resolve`, { method: "POST", body: { resolution } }).then(reload)}
+                  />
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        <Photos kind="job" id={jobId} title="Site photos" />
+      </section>
+
+      <MaterialRequests jobId={jobId} canHandle={assigns} onChanged={reload} hideEmpty />
+
+      <ActivityList items={data?.activity} />
+    </>
+  );
+}
+
+// Who's on the clock right now, grouped by task. The page refreshes it every 30 seconds.
+const since = (iso) => {
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000));
+  const t = new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return `since ${t} (${mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h ${String(mins % 60).padStart(2, "0")}`})`;
+};
+
+function byTask(onClock) {
+  const groups = new Map();
+  for (const e of onClock ?? []) groups.set(e.task, [...(groups.get(e.task) ?? []), e]);
+  return [...groups.entries()];
+}
+
+// "Color coats: Luis · Fence: Tyler, Andre" for the job list.
+export const onClockLine = (onClock) =>
+  byTask(onClock).map(([task, people]) => `${task}: ${people.map((p) => p.worker.split(" ")[0]).join(", ")}`).join(" · ");
+
+function OnTheClock({ c }) {
+  const groups = byTask(c.on_clock);
+  return (
+    <section className="panel on-clock">
+      <h3>
+        On the clock now
+        {c.on_clock?.length > 0 && <span className="chip chip-active">{c.on_clock.length} {c.on_clock.length === 1 ? "person" : "people"}</span>}
+      </h3>
+      {!groups.length ? (
+        <p className="help">Nobody on the clock on this job right now.</p>
+      ) : (
+        <ul className="oc-groups">
+          {groups.map(([task, people]) => (
+            <li key={task}>
+              <b className="oc-task">{task}</b>
+              <ul className="oc-people">
+                {people.map((p) => (
+                  <li key={p.worker_id}>
+                    {p.worker} <span className="sub-inline">{since(p.since)}</span>
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+// How far along the crew lead says a task is, how the hours compare, and photos.
+function TaskDone({ t }) {
+  const [photos, setPhotos] = useState(false);
+  if (!t.progress_pct) return null;
+  return (
+    <span className="task-done">
+      <span className={`chip chip-${t.progress_pct === 100 ? "done" : "active"}`}>
+        {t.progress_pct === 100 ? "Done" : `${t.progress_pct}% done`}
+      </span>
+      <Pace pct={t.progress_pct} estimated={t.estimated_hours} used={t.actual_hours + t.open_hours} />
+      {t.progress_note && <span className="sub">{t.progress_note}</span>}
+      <button className="link" onClick={() => setPhotos((v) => !v)} aria-expanded={photos}>
+        {photos ? "Hide photos" : "Photos"}
+      </button>
+      {photos && <Photos kind="task" id={t.task_id} canAdd={false} title="Photos of the work" />}
+    </span>
+  );
+}
 
 function JobDetail({ me, jobId, onBack, onEdit }) {
   const [version, setVersion] = useState(0);
@@ -243,7 +468,7 @@ function JobDetail({ me, jobId, onBack, onEdit }) {
               Edit job
             </button>
           )}
-          {me.role === "gm" && (
+          {me.role === "gm" && !(c.status === "scheduled" && c.crew_lead_name) && (
             <button className="btn-ghost" onClick={() => setStatus(NEXT_STATUS[c.status][0])}>
               {NEXT_STATUS[c.status][1]}
             </button>
@@ -273,6 +498,10 @@ function JobDetail({ me, jobId, onBack, onEdit }) {
           <span className="fig-label">on site now</span>
         </div>
       </div>
+
+      {(c.status === "active" || c.on_clock?.length > 0) && <OnTheClock c={c} />}
+
+      {!DEMO && <FieldPanel me={me} jobId={jobId} c={c} onChanged={() => setVersion((v) => v + 1)} />}
 
       <section className="panel">
         <h3>Hours by task</h3>
@@ -309,6 +538,12 @@ function JobDetail({ me, jobId, onBack, onEdit }) {
                 <th scope="row">
                   {t.name}
                   {amountText(t) && <span className="sub">{amountText(t)}</span>}
+                  {t.crew_size > 1 && t.estimated_hours > 0 && (
+                    <span className="sub">
+                      {t.crew_size} people × {fmt(t.estimated_hours / t.crew_size, 1)} hrs
+                    </span>
+                  )}
+                  <TaskDone t={t} />
                 </th>
                 <td className="w-bar">
                   <HoursBar estimated={t.estimated_hours} actual={t.actual_hours} open={t.open_hours} />
@@ -335,6 +570,7 @@ function JobDetail({ me, jobId, onBack, onEdit }) {
       {!DEMO && (
         <section className="panel">
           <h3>Materials for this job</h3>
+          <MaterialCheck jobId={jobId} kind="on_site" canCheck={false} />
           <JobMaterials jobId={jobId} me={me} />
         </section>
       )}

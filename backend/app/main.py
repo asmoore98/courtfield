@@ -13,7 +13,7 @@ from .auth import current_user
 from .db import Base, engine, get_db
 from .models import User
 from .routers import auth as auth_routes
-from .routers import clients, estimates, geocode, jobs, leads, library, locations, materials, photos, reports, team, time
+from .routers import clients, crews, estimates, geocode, jobs, leads, library, locations, materials, photos, reports, requests, team, time
 from .routers.auth import me_out
 from .schemas import MeOut
 
@@ -61,6 +61,8 @@ app.include_router(leads.router)
 app.include_router(estimates.router)
 app.include_router(library.router)
 app.include_router(photos.router)
+app.include_router(requests.router)
+app.include_router(crews.router)
 
 
 @app.get("/api/health")

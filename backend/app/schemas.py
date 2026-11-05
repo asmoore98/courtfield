@@ -1,5 +1,5 @@
 """Request and response shapes for the API."""
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from typing import Literal
 
@@ -108,6 +108,9 @@ class TaskOut(ORM):
     production_rate: float | None = None
     unit_price: float | None = None
     crew_size: int | None = None
+    progress: str = ""
+    progress_pct: int | None = None
+    progress_note: str = ""
 
 
 class CostLineIn(BaseModel):
@@ -199,6 +202,20 @@ class JobOut(ORM):
     scope_type: ScopeType
     status: JobStatus
     tasks: list[TaskOut]
+    # Out in the field: who runs it, who's on it, when it starts, whether it's started.
+    crew_lead_id: str | None = None
+    crew_lead_name: str | None = None
+    crew_members: list[dict] = []  # [{id, name}]
+    start_date: date | None = None
+    started_at: datetime | None = None
+    site_walk_at: datetime | None = None
+    scope_text: str = ""
+    open_problems: int = 0
+
+    @field_serializer("started_at", "site_walk_at")
+    def _started_utc(self, v: datetime | None):
+        return None if v is None else v.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
+
     # Only filled in for roles that see dollars; omitted otherwise.
     contract_amount: float | None = None
     estimated_labor_rate: float | None = None
@@ -266,6 +283,8 @@ class TimeEntryOut(ORM):
     edited: bool = False
     removed: bool = False
     removed_reason: str = ""
+    changed_by_lead: bool = False  # a crew lead added, fixed or removed it
+    can_fix: bool = False  # this person may correct it
 
     @field_serializer("clock_in", "clock_out", "client_updated_at")
     def _as_utc(self, v: datetime | None):
@@ -274,7 +293,7 @@ class TimeEntryOut(ORM):
 
 
 class OfficeTimeIn(BaseModel):
-    """Time added from the office, e.g. a crew lead's phone was dead."""
+    """Time added by hand, e.g. a crew lead's phone was dead."""
 
     job_id: str
     task_id: str
@@ -308,6 +327,7 @@ class TimeChangeOut(BaseModel):
     reason: str
     changed_by: str
     changed_at: datetime
+    by_crew_lead: bool = False
     before: dict | None
     after: dict | None
 
@@ -331,6 +351,10 @@ class TaskCosting(BaseModel):
     actual_labor_cost: float | None = None
     kind: str = "crew"
     sub_price: float | None = None  # sub tasks: the sub's price (dollar roles only)
+    crew_size: int | None = None
+    progress: str = ""
+    progress_pct: int | None = None
+    progress_note: str = ""
     unit: str = "hr"
     quantity: float | None = None  # how much work: 120 LF of cracks, 3,400 SF a coat…
     coats: float | None = None
@@ -345,7 +369,20 @@ class JobCosting(BaseModel):
     open_hours: float
     hours_used_pct: float | None
     crew_on_site: int
+    on_clock: list[dict] = []  # [{worker, task, since}]: who's on which task right now
     tasks: list[TaskCosting]
+    crew_lead_id: str | None = None
+    crew_members: list[dict] = []
+    crew_lead_name: str | None = None
+    start_date: date | None = None
+    started_at: datetime | None = None
+    site_walk_at: datetime | None = None
+    scope_text: str = ""
+    open_problems: int = 0
+
+    @field_serializer("started_at", "site_walk_at")
+    def _started_utc(self, v: datetime | None):
+        return None if v is None else v.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")
     contract_amount: float | None = None
     estimated_labor_cost: float | None = None
     actual_labor_cost: float | None = None

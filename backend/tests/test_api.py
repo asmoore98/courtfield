@@ -245,7 +245,7 @@ def test_gm_adds_time_for_dead_phone_day(client):
     t0 = now() - timedelta(days=1, hours=6)
     body = {"job_id": job["id"], "task_id": job["tasks"][0]["id"], "worker_id": w["id"],
             "clock_in": iso(t0), "clock_out": iso(t0 + timedelta(hours=4)), "reason": "Crew lead's phone was dead"}
-    assert client.post("/api/time/office", json=body, headers=auth(LEAD)).status_code == 403
+    assert client.post("/api/time/office", json=body, headers=auth("dev-lead-1")).status_code == 403  # not their job
     assert client.post("/api/time/office", json=body, headers=auth(EST)).status_code == 403
     r = client.post("/api/time/office", json=body, headers=auth(GM))
     assert r.status_code == 201, r.text

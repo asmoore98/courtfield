@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .models import CostCategory, Job, JobStatus, TaskKind, TimeEntry, utcnow
 
@@ -101,6 +101,10 @@ def job_costing(job: Job, entries: list[TimeEntry], with_dollars: bool, now: dat
             "unit": t.unit or "hr",
             "quantity": t.quantity,
             "coats": t.coats,
+            "crew_size": t.crew_size,
+            "progress": t.progress or "",
+            "progress_pct": t.progress_pct,
+            "progress_note": t.progress_note or "",
         }
         if with_dollars:
             row["estimated_labor_cost"] = round(t.estimated_cost(), 2) if t.kind != TaskKind.sub else 0.0
@@ -108,6 +112,14 @@ def job_costing(job: Job, entries: list[TimeEntry], with_dollars: bool, now: dat
                 row["sub_price"] = t.sub_price or 0.0
             row["actual_labor_cost"] = round(cost[t.id], 2)
         tasks.append(row)
+
+    # Who's on the clock right now and on which task, for the office.
+    names = {t.id: t.name for t in job.tasks}
+    on_clock = sorted(
+        ({"worker_id": e.worker_id, "worker": e.worker.name, "task_id": e.task_id, "task": names.get(e.task_id, "A task"),
+          "since": e.clock_in.replace(tzinfo=timezone.utc).isoformat().replace("+00:00", "Z")}
+         for e in entries if e.clock_out is None),
+        key=lambda x: (x["task"], x["worker"]))
 
     est = sum(t.estimated_hours for t in job.tasks)
     act = sum(closed_h.values())
@@ -121,6 +133,7 @@ def job_costing(job: Job, entries: list[TimeEntry], with_dollars: bool, now: dat
         "open_hours": round(opn, 2),
         "hours_used_pct": round((act + opn) / est, 4) if est > 0 else None,
         "crew_on_site": len(on_site),
+        "on_clock": on_clock,
         "tasks": tasks,
     }
     if with_dollars:

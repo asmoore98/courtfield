@@ -304,7 +304,7 @@ CHECKLISTS = {
         {"title": "Surface", "questions": [SURFACE, *CRACKS, *SURFACE_PROBLEMS]},
         {"title": "Color and lines", "questions": [
             q("recoat", "New color on the whole court, or just over the repairs?", "choice", options=["Whole court", "Just the repairs"]),
-            q("relines", "Do the lines need repainting?", tasks=[{"name": "Line painting", "qty": "courts"}]),
+            q("relines", "Do the lines need repainting?", tasks=[{"name": "Line painting"}]),
             LINES[3],
         ]},
         {"title": "Nets and posts", "questions": NETS_POSTS, "courts": NET_COURTS},
